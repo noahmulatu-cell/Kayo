@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Settlements - Digital Equb</title>
+  <style>
+    *{box-sizing:border-box}
+    body{font-family:Arial,sans-serif;background:#f3f6f4;margin:0;padding:16px}
+    .wrap{max-width:900px;margin:0 auto}
+    .card{background:#fff;padding:16px;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,.08);margin-bottom:14px}
+    h1{margin:0;font-size:20px;color:#1b5e20}h3{margin:0 0 8px}
+    .top{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px}
+    .nav{display:flex;gap:10px;flex-wrap:wrap;margin-top:8px;font-size:13px}.nav a{color:#2e7d32}
+    label{display:block;margin:10px 0 4px;font-size:14px}
+    input,select,textarea{width:100%;padding:11px;font-size:16px;border:1px solid #ccc;border-radius:8px;background:#fff;font-family:inherit}
+    button{padding:11px 14px;font-size:14px;border:0;border-radius:8px;background:#2e7d32;color:#fff}
+    button.gray{background:#757575}button.red{background:#c62828}button.small{padding:7px 10px;font-size:13px}
+    button:disabled{opacity:.5}
+    .row{display:flex;justify-content:space-between;padding:6px 0;font-size:14px;border-bottom:1px solid #eee}
+    .row:last-child{border-bottom:0}.row.t{font-weight:bold;border-top:2px solid #2e7d32}
+    .small{font-size:12px;color:#666}
+    #msg{margin-bottom:12px;padding:10px;border-radius:8px;font-size:14px;display:none}
+    .err{background:#fdecea;color:#b71c1c}.okm{background:#e8f5e9;color:#1b5e20}
+    .item{border-bottom:1px solid #eee;padding:10px 0;font-size:14px}.item:last-child{border-bottom:0}
+    .tag{font-size:11px;padding:2px 8px;border-radius:10px;color:#fff;margin-left:6px}
+    .tag.COMPLETED{background:#2e7d32}.tag.VOIDED{background:#9e9e9e}
+    .neg{color:#b71c1c}
+  </style>
+  <link rel="stylesheet" href="styles/style.css">
+</head>
+<body>
+<div class="wrap">
+  <div class="card">
+    <div class="top"><h1>Settlements</h1><button class="gray small" id="logout" type="button">Log out</button></div>
+    <div id="admin" class="small"></div>
+    <div class="nav">
+      <a href="index.html">Dashboard</a><a href="members.html">Members</a><a href="equb.html">Equb Groups</a>
+      <a href="collectors.html">Collectors</a><a href="transactions.html">Transactions</a>
+      <a href="correction-requests.html">Correction Requests</a><a href="settlements.html">Settlements</a>
+    </div>
+  </div>
+
+  <div id="msg"></div>
+
+  <div class="card">
+    <h3>Receive cash from a collector</h3>
+    <label for="col">Collector</label>
+    <select id="col"></select>
+
+    <div style="margin-top:10px">
+      <div class="row"><span>Net physical cash collected (all time)</span><b id="cCash">-</b></div>
+      <div class="row"><span>Already settled</span><b id="cSettled">-</b></div>
+      <div class="row t"><span>Expected cash in hand now</span><b id="cExpected">-</b></div>
+    </div>
+    <div class="small" style="margin-top:6px">Only CASH counts. Electronic payments are not part of settlement. Reversals and corrections are already included.</div>
+
+    <label for="amount">Cash actually handed over (ETB)</label>
+    <input id="amount" type="number" inputmode="decimal" min="0" step="0.01">
+    <div id="preview" class="small" style="margin-top:6px"></div>
+
+    <label for="date">Settlement date</label>
+    <input id="date" type="date">
+
+    <label for="note">Note (optional)</label>
+    <textarea id="note" rows="2"></textarea>
+
+    <button id="save" type="button" style="width:100%;margin-top:14px">Record settlement</button>
+  </div>
+
+  <div class="card">
+    <h3>Settlement history</h3>
+    <div id="list"></div>
+  </div>
+</div>
+
+<script src="equb-core.js"></script>
+  <script src="admin-nav.js"></script>
+<script>
+  var $ = function (id) { return document.getElementById(id); };
+  var admin = equbGetAdminSession();
+  if (!admin) { window.location.href = "admin-login.html"; }
+  var busy = false;
+  window.onerror = function (m, s, l) { show("Page error: " + m + " (line " + l + ")", false); };
+  $("logout").addEventListener("click", function () { localStorage.removeItem(EQUB_KEYS.adminSession); window.location.href = "admin-login.html"; });
+
+  function show(t, good) { $("msg").textContent = t; $("msg").className = good ? "okm" : "err"; $("msg").style.display = "block"; window.scrollTo(0, 0); }
+  function requireAdmin() {
+    admin = equbGetAdminSession();
+    if (!admin) { window.location.href = "admin-login.html"; return null; }
+    return admin;
+  }
+
+  /* Same rule as equb-core: cash net minus non-voided settlements */
+  function figures(collectorId) {
+    var cash = equbSummarize(equbLoad(EQUB_KEYS.transactions, []).filter(function (t) { return t.collectorId === collectorId; })).cash;
+    var settled = equbLoad(EQUB_KEYS.settlements, [])
+      .filter(function (x) { return x.collectorId === collectorId && x.status !== "VOIDED"; })
+      .reduce(function (s, x) { return s + (Number(x.amount) || 0); }, 0);
+    return { cash: equbMoney(cash), settled: equbMoney(settled), expected: equbCashInHand(collectorId) };
+  }
+
+  function refreshFigures() {
+    var id = $("col").value;
+    if (!id) { ["cCash", "cSettled", "cExpected"].forEach(function (i) { $(i).textContent = "-"; }); return; }
+    var f = figures(id);
+    $("cCash").textContent = equbFormat(f.cash);
+    $("cSettled").textContent = equbFormat(f.settled);
+    $("cExpected").textContent = equbFormat(f.expected);
+    $("cExpected").className = f.expected < 0 ? "neg" : "";
+    updatePreview();
+  }
+
+  function updatePreview() {
+    var id = $("col").value; if (!id) return;
+    var f = figures(id), v = equbMoney($("amount").value);
+    if (!(v > 0)) { $("preview").textContent = ""; return; }
+    var diff = equbMoney(f.expected - v);
+    $("preview").textContent = v > f.expected ? "Amount is more than the expected cash. This is not allowed." :
+      diff === 0 ? "Fully settled. Nothing remaining." : "Shortage: " + equbFormat(diff) + " stays outstanding with the collector.";
+  }
+
+  function save() {
+    if (busy) return;
+    var a = requireAdmin(); if (!a) return;
+    busy = true; $("save").disabled = true;
+    try {
+      var id = $("col").value, v = equbMoney($("amount").value), date = $("date").value;
+      if (!id) return show("Select a collector.", false);
+      if (!date) return show("Choose the settlement date.", false);
+      if (date > equbToday()) return show("The settlement date cannot be in the future.", false);
+      if (!(v > 0)) return show("Enter the cash handed over (more than 0).", false);
+
+      var col = equbLoad(EQUB_KEYS.collectors, []).find(function (c) { return c.id === id; });
+      if (!col) return show("Collector not found.", false);
+
+      var f = figures(id);                                    // fresh figures at save time
+      if (f.expected <= 0) return show("This collector has no cash to settle (expected " + equbFormat(f.expected) + ").", false);
+      if (v > f.expected) return show("Amount " + equbFormat(v) + " is more than the expected " + equbFormat(f.expected) + ". Overages need an authorized exception, which this prototype does not support.", false);
+
+      var list = equbLoad(EQUB_KEYS.settlements, []);
+      var rec = {
+        id: equbUid("STL"), collectorId: id, collectorName: col.name,
+        date: date, expectedCash: f.expected, actualHandedOver: v, amount: v,
+        shortage: equbMoney(f.expected - v), remainingAfter: equbMoney(f.expected - v),
+        status: "COMPLETED", receivedBy: a.adminId, receivedByName: a.adminName,
+        note: $("note").value.trim(), createdAt: new Date().toISOString()
+      };
+      list.push(rec);
+      if (!equbSave(EQUB_KEYS.settlements, list)) return show("Could not save. Nothing was recorded.", false);
+
+      var notes = equbLoad(EQUB_KEYS.notifications, []);
+      notes.push({ id: equbUid("NTF"), type: "SETTLEMENT_COMPLETED", recipientRole: "COLLECTOR", recipientId: id,
+        message: "Settlement of " + equbFormat(v) + " recorded." + (rec.shortage > 0 ? " Remaining: " + equbFormat(rec.shortage) + "." : ""),
+        relatedId: rec.id, read: false, createdAt: rec.createdAt });
+      equbSave(EQUB_KEYS.notifications, notes);
+
+      $("amount").value = ""; $("note").value = "";
+      show("Settlement " + rec.id + " recorded." + (rec.shortage > 0 ? " Shortage " + equbFormat(rec.shortage) + " remains outstanding." : " Fully settled."), true);
+      refreshFigures(); renderList();
+    } finally { busy = false; $("save").disabled = false; }
+  }
+
+  function voidSettlement(id) {
+    if (busy) return;
+    var a = requireAdmin(); if (!a) return;
+    var reason = prompt("Reason for voiding this settlement (required):");
+    if (reason === null) return;
+    if (reason.trim().length < 5) return show("Enter a reason of at least 5 characters.", false);
+    var list = equbLoad(EQUB_KEYS.settlements, []);
+    var s = list.find(function (x) { return x.id === id; });
+    if (!s || s.status === "VOIDED") return show("This settlement cannot be voided.", false);
+    s.status = "VOIDED"; s.voidedAt = new Date().toISOString(); s.voidedBy = a.adminId; s.voidReason = reason.trim();
+    if (!equbSave(EQUB_KEYS.settlements, list)) return show("Could not save.", false);
+    show("Settlement voided. The cash is outstanding with the collector again. The record is kept.", true);
+    refreshFigures(); renderList();
+  }
+
+  function renderList() {
+    var list = equbLoad(EQUB_KEYS.settlements, []).slice().sort(function (a, b) { return String(b.createdAt || "").localeCompare(String(a.createdAt || "")); });
+    var box = $("list"); box.innerHTML = "";
+    if (!list.length) { box.innerHTML = '<div class="small">No settlements yet.</div>'; return; }
+    list.forEach(function (s) {
+      var st = s.status === "VOIDED" ? "VOIDED" : "COMPLETED";
+      var d = document.createElement("div"); d.className = "item";
+      d.innerHTML = '<div><b class="n"></b><span class="tag ' + st + '">' + st + '</span></div><div class="small l1"></div><div class="small l2"></div>';
+      d.querySelector(".n").textContent = (s.collectorName || s.collectorId) + " - " + equbFormat(s.amount);
+      d.querySelector(".l1").textContent = s.id + " | " + (s.date || "") + " | expected " + equbFormat(s.expectedCash || 0) +
+        (s.shortage > 0 ? " | shortage " + equbFormat(s.shortage) : "") + " | received by " + (s.receivedByName || s.receivedBy || "-");
+      d.querySelector(".l2").textContent = (s.note ? "Note: " + s.note : "") + (s.status === "VOIDED" ? " | Voided: " + (s.voidReason || "") : "");
+      if (st === "COMPLETED") {
+        var b = document.createElement("button"); b.className = "red small"; b.style.marginTop = "6px"; b.textContent = "Void";
+        b.addEventListener("click", function () { voidSettlement(s.id); });
+        d.appendChild(b);
+      }
+      box.appendChild(d);
+    });
+  }
+
+  if (admin) {
+    $("admin").textContent = "Logged in as " + admin.adminName;
+    var sel = $("col"); sel.innerHTML = "";
+    var cols = equbLoad(EQUB_KEYS.collectors, []);
+    if (!cols.length) sel.innerHTML = '<option value="">No collectors</option>';
+    cols.forEach(function (c) {
+      var o = document.createElement("option"); o.value = c.id;
+      o.textContent = c.name + " (" + c.id + ") - in hand " + equbFormat(equbCashInHand(c.id)); sel.appendChild(o);
+    });
+    $("date").value = equbToday(); $("date").max = equbToday();
+    sel.addEventListener("change", refreshFigures);
+    $("amount").addEventListener("input", updatePreview);
+    $("save").addEventListener("click", save);
+    refreshFigures(); renderList();
+  }
+</script>
+</body>
+</html>

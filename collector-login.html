@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Collector Login - Digital Equb</title>
+  <style>
+    *{box-sizing:border-box}
+    body{font-family:Arial,sans-serif;background:#f3f6f4;margin:0;min-height:100vh;
+         display:flex;align-items:center;justify-content:center;padding:16px}
+    .card{background:#fff;width:100%;max-width:380px;padding:24px;border-radius:12px;
+          box-shadow:0 2px 12px rgba(0,0,0,.1)}
+    h1{margin:0 0 4px;font-size:22px;color:#1b5e20}
+    p.sub{margin:0 0 20px;color:#666;font-size:14px}
+    label{display:block;margin:12px 0 4px;font-size:14px;color:#333}
+    input{width:100%;padding:12px;font-size:16px;border:1px solid #ccc;border-radius:8px}
+    button{width:100%;margin-top:18px;padding:13px;font-size:16px;border:0;border-radius:8px;
+           background:#2e7d32;color:#fff;cursor:pointer}
+    button:disabled{background:#9bbf9d}
+    #msg{margin-top:14px;padding:10px;border-radius:8px;font-size:14px;display:none}
+    .err{background:#fdecea;color:#b71c1c}
+    .okm{background:#e8f5e9;color:#1b5e20}
+    .hint{margin-top:16px;font-size:12px;color:#888;text-align:center}
+  </style>
+  <link rel="stylesheet" href="styles/style.css">
+</head>
+<body>
+  <div class="card">
+    <h1>Collector Login</h1>
+    <p class="sub">Digital Equb Management System</p>
+
+    <label for="who">Collector ID or phone</label>
+    <input id="who" type="text" autocomplete="username" placeholder="COL-DEMO">
+
+    <label for="pin">PIN</label>
+    <input id="pin" type="password" inputmode="numeric" autocomplete="current-password" placeholder="PIN">
+
+    <button id="btn" type="button">Log in</button>
+    <div id="msg"></div>
+    <div class="hint">Demo login: COL-DEMO / 1234<br>Prototype only. Real security needs a backend.</div>
+  </div>
+
+  <script src="equb-core.js"></script>
+  <script>
+    var SESSION_HOURS = 8;
+    var MAX_ATTEMPTS = 5;
+    var LOCK_MINUTES = 5;
+    var ATTEMPT_KEY = "digital_equb_login_attempts";
+
+    equbSeedDemoData();   // adds demo data only for keys that do not exist
+
+    // Make sure the demo collector exists. Existing collectors are never changed.
+    (function ensureDemoCollector() {
+      var cols = equbLoad(EQUB_KEYS.collectors, []);
+      var exists = cols.some(function (c) { return c.id === "COL-DEMO"; });
+      if (!exists) {
+        cols.push({
+          id: "COL-DEMO", name: "Demo Collector", phone: "0922999999",
+          pin: "1234", status: "ACTIVE", dailyCashLimit: 20000,
+          createdAt: new Date().toISOString()
+        });
+        equbSave(EQUB_KEYS.collectors, cols);
+      }
+    })();
+
+    var whoEl = document.getElementById("who");
+    var pinEl = document.getElementById("pin");
+    var btn = document.getElementById("btn");
+    var msg = document.getElementById("msg");
+
+    if (equbGetCollectorSession()) {
+      window.location.href = "collector-dashboard.html";
+    }
+
+    function show(text, isError) {
+      msg.textContent = text;
+      msg.className = isError ? "err" : "okm";
+      msg.style.display = "block";
+    }
+
+    function getAttempts() {
+      return equbLoad(ATTEMPT_KEY, { count: 0, lockedUntil: 0 });
+    }
+
+    function login() {
+      var attempts = getAttempts();
+      if (Date.now() < attempts.lockedUntil) {
+        var mins = Math.ceil((attempts.lockedUntil - Date.now()) / 60000);
+        show("Too many failed attempts. Try again in " + mins + " minute(s).", true);
+        return;
+      }
+
+      var who = whoEl.value.trim();
+      var pin = pinEl.value.trim();
+      if (!who || !pin) { show("Enter your collector ID or phone and your PIN.", true); return; }
+
+      var collectors = equbLoad(EQUB_KEYS.collectors, []);
+      var collector = collectors.find(function (c) {
+        return String(c.id).toLowerCase() === who.toLowerCase() || String(c.phone) === who;
+      });
+
+      // Accept the stored PIN under either "pin" or "password"
+      var storedPin = "";
+      if (collector) {
+        if (collector.pin !== undefined) storedPin = String(collector.pin);
+        else if (collector.password !== undefined) storedPin = String(collector.password);
+      }
+
+      if (!collector || storedPin === "" || storedPin !== pin) {
+        attempts.count += 1;
+        if (attempts.count >= MAX_ATTEMPTS) {
+          attempts.lockedUntil = Date.now() + LOCK_MINUTES * 60000;
+          attempts.count = 0;
+        }
+        equbSave(ATTEMPT_KEY, attempts);
+        show("Incorrect ID/phone or PIN.", true);
+        return;
+      }
+
+      if (collector.status !== "ACTIVE") {
+        show("This collector account is " + collector.status + ". Contact the administrator.", true);
+        return;
+      }
+
+      equbSave(ATTEMPT_KEY, { count: 0, lockedUntil: 0 });
+
+      var now = Date.now();
+      equbSave(EQUB_KEYS.collectorSession, {
+        collectorId: collector.id,
+        collectorName: collector.name,
+        loginAt: now,
+        expiresAt: now + SESSION_HOURS * 3600000
+      });
+
+      btn.disabled = true;
+      show("Login successful. Opening dashboard...", false);
+      window.location.href = "collector-dashboard.html";
+    }
+
+    btn.addEventListener("click", login);
+    pinEl.addEventListener("keydown", function (e) { if (e.key === "Enter") login(); });
+  </script>
+</body>
+</html>

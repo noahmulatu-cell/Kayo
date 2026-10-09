@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>My History - Digital Equb</title>
+  <style>
+    *{box-sizing:border-box}
+    body{font-family:Arial,sans-serif;background:#f3f6f4;margin:0;padding:16px}
+    .wrap{max-width:700px;margin:0 auto}
+    .card{background:#fff;padding:16px;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,.08);margin-bottom:14px}
+    h1{margin:0 0 4px;font-size:20px;color:#1b5e20}
+    .nav{display:flex;gap:10px;flex-wrap:wrap;margin-top:8px;font-size:13px}
+    .nav a{color:#2e7d32}
+    .grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+    @media(max-width:520px){.grid{grid-template-columns:1fr}}
+    label{display:block;margin:8px 0 4px;font-size:13px;color:#333}
+    input,select{width:100%;padding:10px;font-size:15px;border:1px solid #ccc;border-radius:8px;background:#fff}
+    button{padding:10px 14px;font-size:14px;border:0;border-radius:8px;background:#2e7d32;color:#fff}
+    button.gray{background:#757575}
+    .quick{display:flex;gap:8px;margin-top:10px}
+    .row{display:flex;justify-content:space-between;padding:6px 0;font-size:14px;border-bottom:1px solid #eee}
+    .row:last-child{border-bottom:0}
+    .row.total{font-weight:bold;font-size:16px;border-top:2px solid #2e7d32}
+    .small{font-size:12px;color:#666}
+    .item{border-bottom:1px solid #eee;padding:12px 0}
+    .item:last-child{border-bottom:0}
+    .line{display:flex;justify-content:space-between;gap:8px;align-items:flex-start}
+    .amt{font-weight:bold;font-size:16px;white-space:nowrap}
+    .neg{color:#b71c1c}
+    .tag{font-size:11px;padding:2px 8px;border-radius:10px;color:#fff;margin-left:6px;white-space:nowrap}
+    .tag.COLLECTION{background:#2e7d32}.tag.REVERSAL{background:#c62828}.tag.CORRECTED{background:#1565c0}
+    .tag.corrected-orig{background:#6a1b9a}.tag.pending{background:#e65100}
+    .rel{font-size:12px;color:#444;margin-top:3px;word-break:break-all}
+    a.rcpt{display:inline-block;margin-top:6px;font-size:13px;color:#1565c0}
+    #err{display:none;background:#fdecea;color:#b71c1c;padding:10px;border-radius:8px;margin-bottom:12px;font-size:14px}
+  </style>
+  <link rel="stylesheet" href="styles/style.css">
+</head>
+<body>
+<div class="wrap">
+  <div id="err"></div>
+
+  <div class="card">
+    <h1>My History</h1>
+    <div id="who" class="small"></div>
+    <div class="nav">
+      <a href="collector-dashboard.html">Dashboard</a>
+      <a href="collector-collection.html">Collection</a>
+      <a href="offline-sync.html">Offline Sync</a>
+      <a href="collector-corrections.html">Corrections</a>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="grid">
+      <div><label for="from">From date</label><input id="from" type="date"></div>
+      <div><label for="to">To date</label><input id="to" type="date"></div>
+      <div><label for="fmethod">Payment method</label>
+        <select id="fmethod">
+          <option value="ALL">All methods</option>
+          <option value="CASH">Cash</option>
+          <option value="MOBILE_MONEY">Mobile money</option>
+          <option value="BANK">Bank</option>
+        </select>
+      </div>
+      <div><label for="ftype">Type</label>
+        <select id="ftype">
+          <option value="ALL">All types</option>
+          <option value="COLLECTION">Original collections</option>
+          <option value="REVERSAL">Reversals</option>
+          <option value="CORRECTED">Corrected</option>
+        </select>
+      </div>
+    </div>
+    <div class="quick">
+      <button id="today" type="button">Today</button>
+      <button id="all" class="gray" type="button">All time</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <b>Totals for the records shown below</b>
+    <div class="small" style="margin-bottom:6px" id="scope"></div>
+    <div class="row"><span>Original collections</span><span id="sGross">-</span></div>
+    <div class="row"><span>Reversals</span><span id="sRev">-</span></div>
+    <div class="row"><span>Corrected payments</span><span id="sCor">-</span></div>
+    <div class="row total"><span>Net collection</span><span id="sNet">-</span></div>
+    <div class="row"><span>Physical cash (net)</span><span id="sCash">-</span></div>
+    <div class="row"><span>Electronic (net)</span><span id="sElec">-</span></div>
+    <div class="row"><span>Payments recorded</span><span id="sCount">-</span></div>
+    <div class="small" style="margin-top:6px">Net = original + reversals + corrected. Reversals are negative. "Payments recorded" counts original collections only.</div>
+  </div>
+
+  <div class="card">
+    <b>Transactions</b>
+    <div id="list"></div>
+  </div>
+</div>
+
+<script src="equb-core.js"></script>
+<script>
+  var $ = function (id) { return document.getElementById(id); };
+
+  window.onerror = function (msg, src, line) {
+    $("err").textContent = "Page error: " + msg + " (line " + line + ")";
+    $("err").style.display = "block";
+  };
+
+  var session = equbGetCollectorSession();
+  var me = null;
+  if (!session) { window.location.href = "collector-login.html"; }
+  else {
+    me = equbLoad(EQUB_KEYS.collectors, []).find(function (c) { return c.id === session.collectorId; });
+    if (!me || me.status !== "ACTIVE") {
+      localStorage.removeItem(EQUB_KEYS.collectorSession);
+      window.location.href = "collector-login.html";
+    }
+  }
+
+  var METHOD = { CASH: "Cash", MOBILE_MONEY: "Mobile money", BANK: "Bank" };
+
+  /* Only THIS collector's records, newest first */
+  function myTransactions() {
+    return equbLoad(EQUB_KEYS.transactions, [])
+      .filter(function (t) { return t.collectorId === session.collectorId; })
+      .sort(function (a, b) { return String(b.createdAt || "").localeCompare(String(a.createdAt || "")); });
+  }
+
+  function filtered() {
+    var from = $("from").value, to = $("to").value;
+    var m = $("fmethod").value, ty = $("ftype").value;
+    return myTransactions().filter(function (t) {
+      if (from && (t.date || "") < from) return false;
+      if (to && (t.date || "") > to) return false;
+      if (m !== "ALL" && t.method !== m) return false;
+      if (ty !== "ALL" && (t.type || "COLLECTION") !== ty) return false;
+      return true;
+    });
+  }
+
+  function render() {
+    var rows = filtered();
+    var all = myTransactions();
+    var s = equbSummarize(rows);
+
+    $("sGross").textContent = equbFormat(s.grossOriginal);
+    $("sRev").textContent = equbFormat(s.reversals);
+    $("sCor").textContent = equbFormat(s.corrected);
+    $("sNet").textContent = equbFormat(s.net);
+    $("sCash").textContent = equbFormat(s.cash);
+    $("sElec").textContent = equbFormat(s.electronic);
+    $("sCount").textContent = s.count;
+    $("scope").textContent = rows.length + " of " + all.length + " record(s) match the filters.";
+
+    var list = $("list");
+    list.innerHTML = "";
+    if (!rows.length) { list.innerHTML = '<div class="small" style="padding:10px 0">No transactions found.</div>'; return; }
+
+    rows.forEach(function (t) {
+      var type = t.type || "COLLECTION";
+      var amt = Number(t.amount) || 0;
+      var div = document.createElement("div");
+      div.className = "item";
+      div.innerHTML =
+        '<div class="line"><div><b class="who"></b><span class="tag ' + type + '">' + type + '</span></div>' +
+        '<div class="amt"></div></div>' +
+        '<div class="small l1"></div><div class="small l2"></div><div class="rel"></div><a class="rcpt" href="#"></a>';
+
+      div.querySelector(".who").textContent = t.memberName || t.memberId || "-";
+      var a = div.querySelector(".amt");
+      a.textContent = (amt > 0 ? "+" : "") + equbFormat(amt);
+      if (amt < 0) a.className = "amt neg";
+      div.querySelector(".l1").textContent = (t.date || "-") + "  |  " + (METHOD[t.method] || t.method) + "  |  " + (t.groupName || t.groupId || "");
+      div.querySelector(".l2").textContent = t.id;
+
+      /* Relationships */
+      var rel = [];
+      if (type === "REVERSAL" && t.originalTransactionId) rel.push("Reverses: " + t.originalTransactionId);
+      if (type === "CORRECTED" && t.originalTransactionId) rel.push("Replaces: " + t.originalTransactionId);
+      if (type === "COLLECTION" && (t.reversalTransactionId || t.replacementTransactionId || t.correctionRequestId)) {
+        var tag = document.createElement("span");
+        tag.className = "tag corrected-orig"; tag.textContent = "CORRECTED LATER";
+        div.querySelector(".who").parentNode.appendChild(tag);
+        if (t.reversalTransactionId) rel.push("Reversal: " + t.reversalTransactionId);
+        if (t.replacementTransactionId) rel.push("Replacement: " + t.replacementTransactionId);
+      }
+      if (t.correctionRequestId) rel.push("Request: " + t.correctionRequestId);
+      if (t.syncStatus === "PENDING" || t.syncStatus === "FAILED") {
+        var p = document.createElement("span");
+        p.className = "tag pending"; p.textContent = t.syncStatus === "FAILED" ? "SYNC FAILED" : "WAITING TO SYNC";
+        div.querySelector(".who").parentNode.appendChild(p);
+      }
+      div.querySelector(".rel").textContent = rel.join("  |  ");
+
+      var r = div.querySelector(".rcpt");
+      r.textContent = type === "REVERSAL" ? "View adjustment notice" : "View receipt";
+      r.href = "transaction-receipt.html?id=" + encodeURIComponent(t.id);
+      r.addEventListener("click", function () { equbSave("digital_equb_last_receipt_id", t.id); });
+
+      list.appendChild(div);
+    });
+  }
+
+  if (me) {
+    $("who").textContent = me.name + " (" + me.id + ")";
+    ["from", "to", "fmethod", "ftype"].forEach(function (id) { $(id).addEventListener("change", render); });
+    $("today").addEventListener("click", function () { $("from").value = equbToday(); $("to").value = equbToday(); render(); });
+    $("all").addEventListener("click", function () { $("from").value = ""; $("to").value = ""; $("fmethod").value = "ALL"; $("ftype").value = "ALL"; render(); });
+    render();
+  }
+</script>
+</body>
+</html>

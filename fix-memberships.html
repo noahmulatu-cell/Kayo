@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Fix Memberships</title>
+  <style>
+    body{font-family:Arial,sans-serif;padding:16px;background:#f3f6f4}
+    .card{background:#fff;padding:14px;border-radius:10px;margin-bottom:12px;box-shadow:0 1px 6px rgba(0,0,0,.1)}
+    button{padding:12px;border:0;border-radius:8px;background:#2e7d32;color:#fff;font-size:15px;width:100%;margin-top:8px}
+    pre{white-space:pre-wrap;font-size:13px;background:#f6f6f6;padding:8px;border-radius:6px}
+    .ok{color:#1b5e20}.bad{color:#b71c1c}
+  </style>
+  <link rel="stylesheet" href="styles/style.css">
+</head>
+<body>
+  <div class="card">
+    <h3>What is stored</h3>
+    <pre id="report">Loading...</pre>
+  </div>
+
+  <div class="card">
+    <h3>Repair</h3>
+    <p style="font-size:14px">Choose a group. Every ACTIVE member that is not already in it gets a membership record. Nothing is deleted or overwritten, and the group's maximum size is respected.</p>
+    <select id="group" style="width:100%;padding:12px;font-size:16px"></select>
+    <button id="addAll" type="button">Add all active members to this group</button>
+    <button id="fromRecords" type="button" style="background:#455a64">Create memberships from old member records (groupId field)</button>
+    <p id="result"></p>
+    <p><a href="collector-collection.html">Go to collection page</a></p>
+  </div>
+
+  <script src="equb-core.js"></script>
+  <script>
+    function isActive(s) { return s === undefined || s === null || s === "" || String(s).toUpperCase() === "ACTIVE"; }
+    function activeCount(groupId, ms) {
+      return ms.filter(function (x) { return x.groupId === groupId && x.status === "ACTIVE"; }).length;
+    }
+
+    function render() {
+      var members = equbLoad(EQUB_KEYS.members, []);
+      var groups = equbLoad(EQUB_KEYS.groups, []);
+      var ms = equbLoad(EQUB_KEYS.memberships, []);
+
+      var txt = "Members: " + members.length + "\nGroups: " + groups.length + "\nMemberships: " + ms.length + "\n\n";
+      txt += "GROUPS\n" + (groups.map(function (g) {
+        return g.id + " | " + (g.name || g.groupName) + " | status: " + g.status +
+               " | active members linked: " + activeCount(g.id, ms) + " | max: " + (g.maxMembers || "none");
+      }).join("\n") || "(none)");
+      txt += "\n\nMEMBERS\n" + (members.map(function (m) {
+        return m.id + " | " + (m.name || m.fullName) + " | status: " + m.status +
+               " | fields: " + Object.keys(m).join(",");
+      }).join("\n") || "(none)");
+      document.getElementById("report").textContent = txt;
+
+      var sel = document.getElementById("group");
+      sel.innerHTML = "";
+      groups.forEach(function (g) {
+        var o = document.createElement("option");
+        o.value = g.id; o.textContent = (g.name || g.groupName || g.id) + " (" + g.id + ")";
+        sel.appendChild(o);
+      });
+    }
+
+    function say(text, good) {
+      var r = document.getElementById("result");
+      r.textContent = text; r.className = good ? "ok" : "bad";
+    }
+
+    function link(groupId, memberId, ms, groups) {
+      var exists = ms.some(function (x) { return x.groupId === groupId && x.memberId === memberId && x.status === "ACTIVE"; });
+      if (exists) return "exists";
+      var g = groups.find(function (x) { return x.id === groupId; });
+      var max = g ? Number(g.maxMembers) : 0;
+      if (max > 0 && activeCount(groupId, ms) >= max) return "full";
+      ms.push({ id: equbUid("MSP"), memberId: memberId, groupId: groupId,
+                joinedAt: new Date().toISOString(), status: "ACTIVE", leftAt: null });
+      return "added";
+    }
+
+    document.getElementById("addAll").addEventListener("click", function () {
+      var groupId = document.getElementById("group").value;
+      if (!groupId) { say("No group selected. Create a group first.", false); return; }
+      var members = equbLoad(EQUB_KEYS.members, []);
+      var groups = equbLoad(EQUB_KEYS.groups, []);
+      var ms = equbLoad(EQUB_KEYS.memberships, []);
+      var added = 0, full = 0;
+      members.forEach(function (m) {
+        if (!isActive(m.status)) return;
+        var r = link(groupId, m.id, ms, groups);
+        if (r === "added") added++; if (r === "full") full++;
+      });
+      equbSave(EQUB_KEYS.memberships, ms);
+      say("Added " + added + " membership(s)." + (full ? " " + full + " skipped: group is full." : ""), true);
+      render();
+    });
+
+    document.getElementById("fromRecords").addEventListener("click", function () {
+      var members = equbLoad(EQUB_KEYS.members, []);
+      var groups = equbLoad(EQUB_KEYS.groups, []);
+      var ms = equbLoad(EQUB_KEYS.memberships, []);
+      var added = 0, unknown = 0;
+      members.forEach(function (m) {
+        var gid = m.groupId || m.equbGroupId || m.equbId || m.group;
+        if (!gid) return;
+        if (!groups.some(function (g) { return g.id === gid; })) { unknown++; return; }
+        if (link(gid, m.id, ms, groups) === "added") added++;
+      });
+      equbSave(EQUB_KEYS.memberships, ms);
+      say("Added " + added + " membership(s) from member records." + (unknown ? " " + unknown + " pointed to unknown groups." : ""), true);
+      render();
+    });
+
+    render();
+  </script>
+</body>
+</html>

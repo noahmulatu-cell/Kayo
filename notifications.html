@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Notifications - Digital Equb</title>
+  <style>
+    *{box-sizing:border-box}
+    body{font-family:Arial,sans-serif;background:#f3f6f4;margin:0;padding:16px}
+    .wrap{max-width:900px;margin:0 auto}
+    .card{background:#fff;padding:16px;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,.08);margin-bottom:14px}
+    h1{margin:0;font-size:20px;color:#1b5e20}h3{margin:0 0 8px}
+    .top{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px}
+    .nav{display:flex;gap:10px;flex-wrap:wrap;margin-top:8px;font-size:13px}.nav a{color:#2e7d32}
+    label{display:block;margin:10px 0 4px;font-size:13px}
+    input,select,textarea{width:100%;padding:10px;font-size:15px;border:1px solid #ccc;border-radius:8px;background:#fff;font-family:inherit}
+    button{padding:9px 13px;font-size:14px;border:0;border-radius:8px;background:#2e7d32;color:#fff}
+    button.gray{background:#757575}button.small{padding:6px 10px;font-size:12px}
+    .grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}
+    @media(max-width:600px){.grid{grid-template-columns:1fr}}
+    #msg{margin-bottom:12px;padding:10px;border-radius:8px;font-size:14px;display:none}
+    .err{background:#fdecea;color:#b71c1c}.okm{background:#e8f5e9;color:#1b5e20}
+    .small{font-size:12px;color:#666}
+    .n{border-bottom:1px solid #eee;padding:10px 0;font-size:14px}.n:last-child{border-bottom:0}
+    .n.unread{background:#f1f8e9;padding-left:8px;border-left:4px solid #2e7d32}
+    .tag{font-size:10px;padding:2px 7px;border-radius:10px;color:#fff;background:#455a64;margin-right:6px}
+    .actions{margin-top:6px;display:flex;gap:8px;align-items:center}
+    .actions a{font-size:13px;color:#1565c0}
+  </style>
+  <link rel="stylesheet" href="styles/style.css">
+</head>
+<body>
+<div class="wrap">
+  <div class="card">
+    <div class="top"><h1>Notifications</h1><button class="gray small" id="logout" type="button">Log out</button></div>
+    <div id="admin" class="small"></div>
+    <div class="nav"></div>
+  </div>
+  <div id="msg"></div>
+
+  <div class="card">
+    <h3>Send a message to collectors</h3>
+    <div class="grid">
+      <div><label for="to">To</label><select id="to"></select></div>
+      <div><label for="stype">Type</label>
+        <select id="stype"><option value="SETTLEMENT_DUE">Settlement due</option><option value="ANNOUNCEMENT">Announcement</option></select></div>
+    </div>
+    <label for="text">Message</label>
+    <textarea id="text" rows="2" maxlength="300"></textarea>
+    <button id="send" type="button" style="width:100%;margin-top:10px">Send</button>
+    <div class="small" style="margin-top:6px">In-app only. SMS needs the backend and a provider. No SMS keys belong in this file.</div>
+  </div>
+
+  <div class="card">
+    <div class="grid">
+      <div><label for="aud">Audience</label>
+        <select id="aud"><option value="ADMIN">Admin</option><option value="COLLECTOR">Collectors</option><option value="ALL">Everyone</option></select></div>
+      <div><label for="st">Status</label>
+        <select id="st"><option value="ALL">All</option><option value="UNREAD">Unread</option></select></div>
+      <div><label for="ty">Type</label><select id="ty"></select></div>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:10px;align-items:center">
+      <span id="count" class="small"></span>
+      <button id="readAll" class="small" type="button" style="margin-left:auto">Mark shown as read</button>
+    </div>
+    <div id="list" style="margin-top:8px"></div>
+  </div>
+</div>
+
+<script src="equb-core.js"></script>
+<script src="admin-nav.js"></script>
+<script>
+  var $ = function (id) { return document.getElementById(id); };
+  var admin = equbGetAdminSession();
+  if (!admin) { window.location.href = "admin-login.html"; }
+  window.onerror = function (m, s, l) { show("Page error: " + m + " (line " + l + ")", false); };
+  $("logout").addEventListener("click", function () { localStorage.removeItem(EQUB_KEYS.adminSession); window.location.href = "admin-login.html"; });
+
+  var TYPES = ["COLLECTION_RECORDED", "CORRECTION_SUBMITTED", "CORRECTION_APPROVED", "CORRECTION_REJECTED", "CORRECTION_PROCESSED",
+    "SETTLEMENT_DUE", "SETTLEMENT_COMPLETED", "PAYOUT_SCHEDULED", "PAYOUT_COMPLETED", "SECURITY_EVENT", "ANNOUNCEMENT"];
+  var LIMIT = 200;
+
+  function show(t, good) { $("msg").textContent = t; $("msg").className = good ? "okm" : "err"; $("msg").style.display = "block"; }
+  function requireAdmin() {
+    admin = equbGetAdminSession();
+    if (!admin) { window.location.href = "admin-login.html"; return null; }
+    return admin;
+  }
+  function linkFor(n) {
+    var t = String(n.type || "");
+    if (t.indexOf("CORRECTION_") === 0) return ["correction-requests.html", "Open corrections"];
+    if (t.indexOf("SETTLEMENT_") === 0) return ["settlements.html", "Open settlements"];
+    if (t.indexOf("PAYOUT_") === 0) return ["payout.html", "Open payouts"];
+    return null;
+  }
+
+  function shown() {
+    var aud = $("aud").value, st = $("st").value, ty = $("ty").value;
+    return equbLoad(EQUB_KEYS.notifications, []).filter(function (n) {
+      if (aud !== "ALL" && n.recipientRole !== aud) return false;
+      if (st === "UNREAD" && n.read) return false;
+      if (ty !== "ALL" && n.type !== ty) return false;
+      return true;
+    }).sort(function (a, b) { return String(b.createdAt || "").localeCompare(String(a.createdAt || "")); });
+  }
+
+  function render() {
+    var rows = shown(), box = $("list");
+    box.innerHTML = "";
+    $("count").textContent = rows.length + " notification(s)" + (rows.length > LIMIT ? ", showing the newest " + LIMIT : "");
+    if (!rows.length) { box.innerHTML = '<div class="small" style="padding:10px 0">Nothing here.</div>'; return; }
+    rows.slice(0, LIMIT).forEach(function (n) {
+      var d = document.createElement("div"); d.className = "n" + (n.read ? "" : " unread");
+      d.innerHTML = '<div><span class="tag"></span><span class="m"></span></div><div class="small t"></div><div class="actions"></div>';
+      d.querySelector(".tag").textContent = n.type || "NOTICE";
+      d.querySelector(".m").textContent = n.message || "";
+      d.querySelector(".t").textContent = (n.createdAt ? new Date(n.createdAt).toLocaleString() : "") +
+        " | to " + (n.recipientRole || "-") + (n.recipientId ? " " + n.recipientId : "") + (n.relatedId ? " | " + n.relatedId : "");
+      var a = d.querySelector(".actions"), lk = linkFor(n);
+      if (lk) { var l = document.createElement("a"); l.href = lk[0]; l.textContent = lk[1]; a.appendChild(l); }
+      if (!n.read) {
+        var b = document.createElement("button"); b.className = "small gray"; b.textContent = "Mark read";
+        b.addEventListener("click", function () { markRead([n.id]); });
+        a.appendChild(b);
+      }
+      box.appendChild(d);
+    });
+  }
+
+  function markRead(ids) {
+    if (!requireAdmin()) return;
+    var all = equbLoad(EQUB_KEYS.notifications, []), now = new Date().toISOString();
+    all.forEach(function (n) { if (ids.indexOf(n.id) > -1 && !n.read) { n.read = true; n.readAt = now; } });
+    if (!equbSave(EQUB_KEYS.notifications, all)) return show("Could not save.", false);
+    render();
+  }
+
+  function send() {
+    var a = requireAdmin(); if (!a) return;
+    var to = $("to").value, type = $("stype").value, text = $("text").value.trim().replace(/\s+/g, " ");
+    if (text.length < 5) return show("Write a message of at least 5 characters.", false);
+    var cols = equbLoad(EQUB_KEYS.collectors, []).filter(function (c) { return !c.status || c.status === "ACTIVE"; });
+    var targets = to === "ALL" ? cols : cols.filter(function (c) { return c.id === to; });
+    if (!targets.length) return show("No active collector to send to.", false);
+    var all = equbLoad(EQUB_KEYS.notifications, []), now = new Date().toISOString();
+    targets.forEach(function (c) {
+      all.push({ id: equbUid("NTF"), type: type, recipientRole: "COLLECTOR", recipientId: c.id, message: text, relatedId: null, read: false, createdAt: now, createdBy: a.adminId });
+    });
+    if (!equbSave(EQUB_KEYS.notifications, all)) return show("Could not save. Nothing was sent.", false);
+    $("text").value = "";
+    show("Sent to " + targets.length + " collector(s).", true);
+    $("aud").value = "COLLECTOR"; render();
+  }
+
+  if (admin) {
+    $("admin").textContent = "Logged in as " + admin.adminName;
+    var ty = $("ty"); ty.innerHTML = '<option value="ALL">All types</option>';
+    TYPES.forEach(function (t) { var o = document.createElement("option"); o.value = t; o.textContent = t; ty.appendChild(o); });
+    var to = $("to"); to.innerHTML = '<option value="ALL">All active collectors</option>';
+    equbLoad(EQUB_KEYS.collectors, []).forEach(function (c) { var o = document.createElement("option"); o.value = c.id; o.textContent = c.name + " (" + c.id + ")"; to.appendChild(o); });
+    ["aud", "st", "ty"].forEach(function (i) { $(i).addEventListener("change", render); });
+    $("send").addEventListener("click", send);
+    $("readAll").addEventListener("click", function () { markRead(shown().map(function (n) { return n.id; })); });
+    render();
+  }
+</script>
+</body>
+</html>

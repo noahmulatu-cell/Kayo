@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Receipt - Digital Equb</title>
+  <style>
+    *{box-sizing:border-box}
+    body{font-family:Arial,sans-serif;background:#f3f6f4;margin:0;padding:16px}
+    .wrap{max-width:420px;margin:0 auto}
+    .receipt{background:#fff;padding:20px;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,.1)}
+    .org{text-align:center;font-size:18px;font-weight:bold;color:#1b5e20}
+    .title{text-align:center;font-size:13px;color:#666;margin:2px 0 12px;letter-spacing:1px}
+    .banner{padding:10px;border-radius:8px;font-size:13px;margin-bottom:12px;display:none}
+    .banner.rev{background:#fdecea;color:#b71c1c;display:block}
+    .banner.cor{background:#e3f2fd;color:#0d47a1;display:block}
+    .banner.pend{background:#fff3e0;color:#e65100;display:block}
+    .row{display:flex;justify-content:space-between;gap:10px;padding:8px 0;border-bottom:1px dashed #ddd;font-size:14px}
+    .row span:first-child{color:#666}
+    .row span:last-child{text-align:right;word-break:break-word;font-weight:bold}
+    .amount{text-align:center;font-size:26px;font-weight:bold;margin:12px 0}
+    .neg{color:#b71c1c}
+    .note{font-size:11px;color:#888;text-align:center;margin-top:14px}
+    .btns{margin-top:14px;display:flex;flex-direction:column;gap:8px}
+    .btns button,.btns a{padding:13px;border:0;border-radius:8px;background:#2e7d32;color:#fff;font-size:15px;text-align:center;text-decoration:none}
+    .btns a.gray{background:#455a64}
+    #error{background:#fdecea;color:#b71c1c;padding:14px;border-radius:10px;display:none}
+    @media print{
+      body{background:#fff;padding:0}
+      .btns{display:none}
+      .receipt{box-shadow:none}
+    }
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <div id="error"></div>
+
+  <div class="receipt" id="receipt" style="display:none">
+    <div class="org" id="org"></div>
+    <div class="title" id="title"></div>
+    <div class="banner" id="banner"></div>
+    <div class="amount" id="amount"></div>
+
+    <div class="row"><span>Receipt ID</span><span id="rid"></span></div>
+    <div class="row"><span>Transaction ID</span><span id="tid"></span></div>
+    <div class="row"><span>Member</span><span id="member"></span></div>
+    <div class="row"><span>Equb group</span><span id="group"></span></div>
+    <div class="row"><span>Collector</span><span id="collector"></span></div>
+    <div class="row"><span>Payment method</span><span id="method"></span></div>
+    <div class="row"><span>Payment date</span><span id="date"></span></div>
+    <div class="row"><span>Recorded at</span><span id="created"></span></div>
+    <div class="row"><span>Status</span><span id="status"></span></div>
+    <div class="row" id="origRow" style="display:none"><span>Original transaction</span><span id="orig"></span></div>
+    <div class="row" id="corrRow" style="display:none"><span>Correction request</span><span id="corr"></span></div>
+
+    <div class="note">Prototype receipt generated on this device. It is not verified against a server record.</div>
+  </div>
+
+  <div class="btns" id="btns" style="display:none">
+    <button id="printBtn" type="button">Print / Save as PDF</button>
+    <a id="backLink" class="gray" href="#">Back</a>
+  </div>
+</div>
+
+<script src="equb-core.js"></script>
+<script>
+  var $ = function (id) { return document.getElementById(id); };
+
+  function fail(text, backHref) {
+    $("error").textContent = text;
+    $("error").style.display = "block";
+    $("btns").style.display = "flex";
+    $("printBtn").style.display = "none";
+    $("backLink").href = backHref;
+    $("backLink").textContent = "Back";
+  }
+
+  function orgName() {
+    var s = equbLoad(EQUB_KEYS.settings, null);
+    if (s && !Array.isArray(s)) {
+      return s.organizationName || s.orgName || s.name || "Digital Equb";
+    }
+    return "Digital Equb";
+  }
+
+  function methodLabel(m) {
+    return { CASH: "Cash", MOBILE_MONEY: "Mobile money", BANK: "Bank" }[m] || m || "-";
+  }
+
+  function fmtDateTime(iso) {
+    if (!iso) return "-";
+    var d = new Date(iso);
+    return isNaN(d.getTime()) ? iso : d.toLocaleString();
+  }
+
+  (function init() {
+    /* Who is viewing? Admin sees any receipt. A collector sees only their own. */
+    var admin = equbGetAdminSession();
+    var collector = admin ? null : equbGetCollectorSession();
+    var backHref = admin ? "members.html" : "collector-collection.html";
+
+    if (!admin && !collector) { window.location.href = "collector-login.html"; return; }
+
+    var id = new URLSearchParams(window.location.search).get("id");
+    if (!id) { fail("No transaction was selected.", backHref); return; }
+
+    var txn = equbLoad(EQUB_KEYS.transactions, []).find(function (t) { return t.id === id; });
+    if (!txn) { fail("Transaction not found on this device.", backHref); return; }
+
+    if (!admin && txn.collectorId !== collector.collectorId) {
+      fail("You do not have permission to view this receipt.", backHref);
+      return;
+    }
+
+    var isReversal = txn.type === "REVERSAL";
+    var isCorrected = txn.type === "CORRECTED";
+    var amt = Number(txn.amount) || 0;
+
+    $("org").textContent = orgName();
+    $("title").textContent = isReversal ? "ADJUSTMENT NOTICE" : "PAYMENT RECEIPT";
+
+    var banner = $("banner");
+    if (isReversal) {
+      banner.className = "banner rev";
+      banner.textContent = "This is a reversal. It cancels an earlier payment and is NOT a payment receipt.";
+    } else if (isCorrected) {
+      banner.className = "banner cor";
+      banner.textContent = "This payment replaces an earlier transaction that was corrected.";
+    } else if (txn.syncStatus === "PENDING") {
+      banner.className = "banner pend";
+      banner.textContent = "Saved offline. Waiting to be synchronized.";
+    }
+
+    var amountEl = $("amount");
+    amountEl.textContent = equbFormat(amt);
+    if (amt < 0) amountEl.className = "amount neg";
+
+    $("rid").textContent = "RCP-" + String(txn.id).replace(/^TXN-/, "");
+    $("tid").textContent = txn.id;
+    $("member").textContent = (txn.memberName || "-") + " (" + (txn.memberId || "-") + ")";
+    $("group").textContent = (txn.groupName || "-") + " (" + (txn.groupId || "-") + ")";
+    $("collector").textContent = (txn.collectorName || "-") + " (" + (txn.collectorId || "-") + ")";
+    $("method").textContent = methodLabel(txn.method);
+    $("date").textContent = txn.date || "-";
+    $("created").textContent = fmtDateTime(txn.createdAt);
+    $("status").textContent = (txn.status || "-") + " / " + (txn.type || "-") +
+      (txn.syncStatus ? " / " + txn.syncStatus : "");
+
+    if (txn.originalTransactionId) {
+      $("origRow").style.display = "flex";
+      $("orig").textContent = txn.originalTransactionId;
+    }
+    if (txn.correctionRequestId) {
+      $("corrRow").style.display = "flex";
+      $("corr").textContent = txn.correctionRequestId;
+    }
+
+    $("receipt").style.display = "block";
+    $("btns").style.display = "flex";
+    $("backLink").href = backHref;
+    $("backLink").textContent = admin ? "Back" : "Back to collection";
+    $("printBtn").addEventListener("click", function () { window.print(); });
+  })();
+</script>
+</body>
+</html>

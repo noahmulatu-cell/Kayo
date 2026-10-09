@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Corrections - Digital Equb</title>
+  <style>
+    *{box-sizing:border-box}
+    body{font-family:Arial,sans-serif;background:#f3f6f4;margin:0;padding:16px}
+    .wrap{max-width:650px;margin:0 auto}
+    .card{background:#fff;padding:16px;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,.08);margin-bottom:14px}
+    h1{margin:0 0 4px;font-size:20px;color:#1b5e20}
+    .nav{display:flex;gap:10px;flex-wrap:wrap;margin-top:8px;font-size:13px}
+    .nav a{color:#2e7d32}
+    label{display:block;margin:12px 0 4px;font-size:14px;color:#333}
+    input,select,textarea{width:100%;padding:11px;font-size:16px;border:1px solid #ccc;border-radius:8px;background:#fff;font-family:inherit}
+    textarea{min-height:80px;resize:vertical}
+    button.main{width:100%;margin-top:16px;padding:14px;font-size:16px;border:0;border-radius:8px;background:#2e7d32;color:#fff}
+    button.main:disabled{background:#9bbf9d}
+    .small{font-size:12px;color:#666}
+    .info{background:#e3f2fd;color:#0d47a1;padding:10px;border-radius:8px;font-size:13px;margin-top:10px}
+    .warn{background:#fff3e0;color:#e65100;padding:10px;border-radius:8px;font-size:13px;margin-top:10px}
+    #msg{margin-top:12px;padding:10px;border-radius:8px;font-size:14px;display:none}
+    .err{background:#fdecea;color:#b71c1c}.okm{background:#e8f5e9;color:#1b5e20}
+    .box{display:none}
+    .req{border-bottom:1px solid #eee;padding:12px 0;font-size:14px}
+    .req:last-child{border-bottom:0}
+    .tag{font-size:11px;padding:2px 8px;border-radius:10px;color:#fff;margin-left:6px}
+    .tag.PENDING{background:#e65100}.tag.APPROVED{background:#1565c0}
+    .tag.PROCESSED{background:#2e7d32}.tag.REJECTED{background:#c62828}
+    .note{font-size:13px;margin-top:4px;word-break:break-all}
+  </style>
+  <link rel="stylesheet" href="styles/style.css">
+</head>
+<body>
+<div class="wrap">
+
+  <div class="card">
+    <h1>Correction Requests</h1>
+    <div id="who" class="small"></div>
+    <div class="nav">
+      <a href="collector-dashboard.html">Dashboard</a>
+      <a href="collector-collection.html">Collection</a>
+      <a href="offline-sync.html">Offline Sync</a>
+      <a href="collector-history.html">My History</a>
+    </div>
+  </div>
+
+  <div class="card">
+    <b>New request</b>
+    <div class="info">You cannot edit a payment. Submit a request and the administrator will review it. The original payment stays on record.</div>
+    <div id="hiddenNote" class="warn" style="display:none"></div>
+
+    <label for="tx">Payment to correct</label>
+    <select id="tx"></select>
+    <div id="txInfo" class="small" style="margin-top:4px"></div>
+
+    <label for="type">What is wrong?</label>
+    <select id="type">
+      <option value="WRONG_AMOUNT">Wrong amount</option>
+      <option value="WRONG_MEMBER">Wrong member</option>
+      <option value="WRONG_GROUP">Wrong Equb group</option>
+      <option value="WRONG_PAYMENT_METHOD">Wrong payment method</option>
+      <option value="DUPLICATE_TRANSACTION">Duplicate payment</option>
+      <option value="OTHER">Other (manual review)</option>
+    </select>
+
+    <div id="bAmount" class="box">
+      <label for="newAmount">Correct amount (ETB)</label>
+      <input id="newAmount" type="number" inputmode="decimal" min="0" step="0.01" placeholder="0.00">
+    </div>
+    <div id="bMember" class="box">
+      <label for="newMember">Correct member (same group)</label>
+      <select id="newMember"></select>
+    </div>
+    <div id="bGroup" class="box">
+      <label for="newGroup">Correct group (the member must belong to it)</label>
+      <select id="newGroup"></select>
+    </div>
+    <div id="bMethod" class="box">
+      <label for="newMethod">Correct payment method</label>
+      <select id="newMethod">
+        <option value="CASH">Cash</option>
+        <option value="MOBILE_MONEY">Mobile money</option>
+        <option value="BANK">Bank</option>
+      </select>
+    </div>
+    <div id="bOther" class="box">
+      <label for="details">Describe exactly what is wrong and what it should be</label>
+      <textarea id="details" placeholder="Explain in detail"></textarea>
+      <div class="small">Other requests are reviewed by hand. No automatic replacement is created.</div>
+    </div>
+
+    <label for="reason">Reason (required)</label>
+    <textarea id="reason" placeholder="Why does this need correcting?"></textarea>
+
+    <button id="submit" class="main" type="button">Submit request</button>
+    <div id="msg"></div>
+  </div>
+
+  <div class="card">
+    <b>My requests</b>
+    <div id="list"></div>
+  </div>
+
+</div>
+
+<script src="equb-core.js"></script>
+<script>
+  var $ = function (id) { return document.getElementById(id); };
+  var busy = false;
+  var session = null;
+
+  window.onerror = function (msg, src, line) {
+    show("Page error: " + msg + " (line " + line + ")", false);
+  };
+
+  /* ---------- Helpers ---------- */
+  function mName(m) { return m.name || m.fullName || m.id; }
+  function gName(g) { return g.name || g.groupName || g.id; }
+  function isActiveStatus(s) { return !s || String(s).trim().toUpperCase() === "ACTIVE"; }
+  var METHOD = { CASH: "Cash", MOBILE_MONEY: "Mobile money", BANK: "Bank" };
+  var TYPE_LABEL = {
+    WRONG_AMOUNT: "Wrong amount", WRONG_MEMBER: "Wrong member", WRONG_GROUP: "Wrong group",
+    WRONG_PAYMENT_METHOD: "Wrong payment method", DUPLICATE_TRANSACTION: "Duplicate payment", OTHER: "Other"
+  };
+
+  function show(text, good) {
+    $("msg").textContent = text;
+    $("msg").className = good ? "okm" : "err";
+    $("msg").style.display = "block";
+  }
+  function hideMsg() { $("msg").style.display = "none"; }
+
+  function kickOut() {
+    localStorage.removeItem(EQUB_KEYS.collectorSession);
+    window.location.href = "collector-login.html";
+  }
+  function requireCollector() {
+    session = equbGetCollectorSession();
+    if (!session) { kickOut(); return null; }
+    var me = equbLoad(EQUB_KEYS.collectors, []).find(function (c) { return c.id === session.collectorId; });
+    if (!me || me.status !== "ACTIVE") { kickOut(); return null; }
+    return me;
+  }
+
+  function fill(select, items, placeholder) {
+    select.innerHTML = "";
+    if (!items.length) {
+      var o = document.createElement("option");
+      o.value = ""; o.textContent = placeholder; select.appendChild(o); return;
+    }
+    items.forEach(function (it) {
+      var o = document.createElement("option");
+      o.value = it.value; o.textContent = it.label; select.appendChild(o);
+    });
+  }
+
+  /* ---------- Eligibility ---------- */
+  function myTransactions() {
+    return equbLoad(EQUB_KEYS.transactions, []).filter(function (t) { return t.collectorId === session.collectorId; });
+  }
+
+  /* Returns { eligible: [...], waitingSync: n } */
+  function eligibleInfo() {
+    var blocked = {};
+    equbLoad(EQUB_KEYS.corrections, []).forEach(function (r) {
+      if (r.status === "PENDING" || r.status === "APPROVED" || r.status === "PROCESSED") blocked[r.transactionId] = true;
+    });
+    var waiting = 0;
+    var eligible = myTransactions().filter(function (t) {
+      if ((t.type || "COLLECTION") !== "COLLECTION") return false;           // reversals and corrected payments are never eligible
+      if ((t.status || "COMPLETED") !== "COMPLETED") return false;
+      if (blocked[t.id]) return false;                                        // pending, approved or already corrected
+      if (t.reversalTransactionId || t.replacementTransactionId) return false;
+      if (t.syncStatus === "PENDING" || t.syncStatus === "FAILED") { waiting++; return false; }
+      return true;
+    }).sort(function (a, b) { return String(b.createdAt || "").localeCompare(String(a.createdAt || "")); });
+    return { eligible: eligible, waitingSync: waiting };
+  }
+
+  function selectedTx() {
+    var id = $("tx").value;
+    return eligibleInfo().eligible.find(function (t) { return t.id === id; }) || null;
+  }
+
+  /* ---------- Form building ---------- */
+  function loadTransactions() {
+    var info = eligibleInfo();
+    fill($("tx"), info.eligible.slice(0, 50).map(function (t) {
+      return { value: t.id, label: (t.date || "") + " | " + (t.memberName || t.memberId) + " | " + equbFormat(t.amount) + " | " + (METHOD[t.method] || t.method) };
+    }), "No payments available to correct");
+
+    var hn = $("hiddenNote");
+    if (info.waitingSync > 0) {
+      hn.textContent = info.waitingSync + " payment(s) are waiting to sync and cannot be corrected yet. Sync them first in Offline Sync.";
+      hn.style.display = "block";
+    } else { hn.style.display = "none"; }
+    $("submit").disabled = !info.eligible.length;
+    refreshFields();
+  }
+
+  function refreshFields() {
+    var t = selectedTx();
+    var type = $("type").value;
+    ["bAmount", "bMember", "bGroup", "bMethod", "bOther"].forEach(function (id) { $(id).style.display = "none"; });
+    if (type === "WRONG_AMOUNT") $("bAmount").style.display = "block";
+    if (type === "WRONG_MEMBER") $("bMember").style.display = "block";
+    if (type === "WRONG_GROUP") $("bGroup").style.display = "block";
+    if (type === "WRONG_PAYMENT_METHOD") $("bMethod").style.display = "block";
+    if (type === "OTHER") $("bOther").style.display = "block";
+
+    if (!t) { $("txInfo").textContent = ""; return; }
+    $("txInfo").textContent = t.id + " | " + (t.groupName || t.groupId) + " | recorded " + (t.createdAt ? new Date(t.createdAt).toLocaleString() : "-");
+
+    var memberships = equbLoad(EQUB_KEYS.memberships, []);
+    var members = equbLoad(EQUB_KEYS.members, []);
+    var groups = equbLoad(EQUB_KEYS.groups, []);
+
+    /* Wrong member: other active members of the SAME group */
+    var memberItems = [];
+    memberships.forEach(function (ms) {
+      if (ms.groupId !== t.groupId || !isActiveStatus(ms.status) || ms.memberId === t.memberId) return;
+      var m = members.find(function (x) { return x.id === ms.memberId; });
+      if (m && isActiveStatus(m.status) && !memberItems.some(function (i) { return i.value === m.id; })) {
+        memberItems.push({ value: m.id, label: mName(m) + " (" + m.id + ")" });
+      }
+    });
+    fill($("newMember"), memberItems, "No other active member in this group");
+
+    /* Wrong group: other active groups the ORIGINAL member belongs to */
+    var groupItems = [];
+    memberships.forEach(function (ms) {
+      if (ms.memberId !== t.memberId || !isActiveStatus(ms.status) || ms.groupId === t.groupId) return;
+      var g = groups.find(function (x) { return x.id === ms.groupId; });
+      if (g && isActiveStatus(g.status) && !groupItems.some(function (i) { return i.value === g.id; })) {
+        groupItems.push({ value: g.id, label: gName(g) + " (" + g.id + ")" });
+      }
+    });
+    fill($("newGroup"), groupItems, "Member is not in any other active group");
+  }
+
+  /* ---------- Validate and build the request ---------- */
+  function buildRequest(t, me) {
+    var type = $("type").value;
+    var reason = $("reason").value.trim().replace(/\s+/g, " ");
+    if (reason.length < 10) return { error: "Enter a reason of at least 10 characters." };
+
+    var changes = {}, details = "", manual = false;
+
+    if (type === "WRONG_AMOUNT") {
+      var amt = equbMoney($("newAmount").value);
+      if (!(amt > 0)) return { error: "Enter a correct amount greater than 0." };
+      if (amt === equbMoney(t.amount)) return { error: "The new amount is the same as the original amount." };
+      changes.amount = amt;
+    } else if (type === "WRONG_MEMBER") {
+      var mid = $("newMember").value;
+      if (!mid) return { error: "Select the correct member." };
+      var inGroup = equbLoad(EQUB_KEYS.memberships, []).some(function (ms) {
+        return ms.memberId === mid && ms.groupId === t.groupId && isActiveStatus(ms.status);
+      });
+      var mem = equbLoad(EQUB_KEYS.members, []).find(function (m) { return m.id === mid; });
+      if (!mem || !isActiveStatus(mem.status) || !inGroup) return { error: "That member is not an active member of this group." };
+      changes.memberId = mem.id; changes.memberName = mName(mem);
+    } else if (type === "WRONG_GROUP") {
+      var gid = $("newGroup").value;
+      if (!gid) return { error: "Select the correct group." };
+      var grp = equbLoad(EQUB_KEYS.groups, []).find(function (g) { return g.id === gid; });
+      var memberOk = equbLoad(EQUB_KEYS.memberships, []).some(function (ms) {
+        return ms.memberId === t.memberId && ms.groupId === gid && isActiveStatus(ms.status);
+      });
+      if (!grp || !isActiveStatus(grp.status) || !memberOk) return { error: "The member is not an active member of that group." };
+      changes.groupId = grp.id; changes.groupName = gName(grp);
+    } else if (type === "WRONG_PAYMENT_METHOD") {
+      var m = $("newMethod").value;
+      if (["CASH", "MOBILE_MONEY", "BANK"].indexOf(m) === -1) return { error: "Select a valid payment method." };
+      if (m === t.method) return { error: "The new payment method is the same as the original." };
+      changes.method = m;
+    } else if (type === "OTHER") {
+      details = $("details").value.trim().replace(/\s+/g, " ");
+      if (details.length < 20) return { error: "Describe the problem in at least 20 characters." };
+      manual = true;
+    }
+    /* DUPLICATE_TRANSACTION needs no extra fields */
+
+    return {
+      request: {
+        id: equbUid("COR"),
+        transactionId: t.id,
+        collectorId: me.id,
+        collectorName: me.name,
+        correctionType: type,
+        reason: reason,
+        details: details,
+        requestedChanges: changes,
+        manualReviewOnly: manual,
+        originalSnapshot: {
+          amount: t.amount, method: t.method, memberId: t.memberId, memberName: t.memberName,
+          groupId: t.groupId, groupName: t.groupName, date: t.date
+        },
+        status: "PENDING",
+        createdAt: new Date().toISOString(),
+        reviewedAt: null, reviewedBy: null, adminNote: "",
+        processedAt: null, reversalTransactionId: null, replacementTransactionId: null
+      }
+    };
+  }
+
+  function submitRequest() {
+    if (busy) return;
+    busy = true; $("submit").disabled = true; hideMsg();
+    try {
+      var me = requireCollector();
+      if (!me) return;
+
+      /* Re-check at submit time: only still-eligible payments, no duplicate pending request */
+      var t = selectedTx();
+      if (!t) { show("This payment is not eligible for correction (it may already have a request).", false); return done(false); }
+
+      var built = buildRequest(t, me);
+      if (built.error) { show(built.error, false); return done(false); }
+
+      var reqs = equbLoad(EQUB_KEYS.corrections, []);
+      var dup = reqs.some(function (r) {
+        return r.transactionId === t.id && (r.status === "PENDING" || r.status === "APPROVED" || r.status === "PROCESSED");
+      });
+      if (dup) { show("A request for this payment already exists.", false); return done(false); }
+
+      reqs.push(built.request);
+      if (!equbSave(EQUB_KEYS.corrections, reqs)) { show("Could not save the request. Nothing was submitted.", false); return done(false); }
+
+      /* Notification for the administrator (failure here does not cancel the request) */
+      var notes = equbLoad(EQUB_KEYS.notifications, []);
+      notes.push({
+        id: equbUid("NTF"), type: "CORRECTION_SUBMITTED", recipientRole: "ADMIN",
+        message: me.name + " requested a correction (" + TYPE_LABEL[built.request.correctionType] + ") for " + t.id,
+        relatedId: built.request.id, read: false, createdAt: new Date().toISOString()
+      });
+      equbSave(EQUB_KEYS.notifications, notes);
+
+      $("reason").value = ""; $("details").value = ""; $("newAmount").value = "";
+      show("Request " + built.request.id + " submitted. The administrator will review it.", true);
+      loadTransactions(); renderRequests();
+      done(true);
+    } catch (e) {
+      console.error(e); show("Unexpected error. Please try again.", false); done(false);
+    }
+  }
+  function done() { busy = false; $("submit").disabled = !eligibleInfo().eligible.length; }
+
+  /* ---------- My requests ---------- */
+  function renderRequests() {
+    var mine = equbLoad(EQUB_KEYS.corrections, [])
+      .filter(function (r) { return r.collectorId === session.collectorId; })
+      .sort(function (a, b) { return String(b.createdAt || "").localeCompare(String(a.createdAt || "")); });
+    var list = $("list");
+    list.innerHTML = "";
+    if (!mine.length) { list.innerHTML = '<div class="small" style="padding:10px 0">No requests yet.</div>'; return; }
+    mine.forEach(function (r) {
+      var div = document.createElement("div");
+      div.className = "req";
+      div.innerHTML = '<div><b></b><span class="tag ' + r.status + '">' + r.status + '</span></div>' +
+                      '<div class="small l1"></div><div class="note l2"></div><div class="note l3"></div>';
+      div.querySelector("b").textContent = TYPE_LABEL[r.correctionType] || r.correctionType;
+      div.querySelector(".l1").textContent = r.id + " | payment " + r.transactionId + " | " + (r.createdAt ? new Date(r.createdAt).toLocaleString() : "");
+      div.querySelector(".l2").textContent = "Reason: " + r.reason;
+      var extra = [];
+      if (r.adminNote) extra.push("Admin note: " + r.adminNote);
+      if (r.status === "PROCESSED") {
+        if (r.reversalTransactionId) extra.push("Reversal: " + r.reversalTransactionId);
+        if (r.replacementTransactionId) extra.push("Replacement: " + r.replacementTransactionId);
+      }
+      if (r.status === "APPROVED") extra.push("Approved, waiting to be processed.");
+      div.querySelector(".l3").textContent = extra.join("  |  ");
+      list.appendChild(div);
+    });
+  }
+
+  /* ---------- Start ---------- */
+  (function init() {
+    var me = requireCollector();
+    if (!me) return;
+    $("who").textContent = me.name + " (" + me.id + ")";
+    $("tx").addEventListener("change", function () { hideMsg(); refreshFields(); });
+    $("type").addEventListener("change", function () { hideMsg(); refreshFields(); });
+    $("submit").addEventListener("click", submitRequest);
+    loadTransactions();
+    renderRequests();
+  })();
+</script>
+</body>
+</html>

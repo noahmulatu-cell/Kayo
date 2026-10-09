@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Equb Groups - Digital Equb</title>
+  <style>
+    *{box-sizing:border-box}
+    body{font-family:Arial,sans-serif;background:#f3f6f4;margin:0;padding:16px}
+    .wrap{max-width:900px;margin:0 auto}
+    .card{background:#fff;padding:16px;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,.08);margin-bottom:14px}
+    h1{margin:0;font-size:20px;color:#1b5e20}h3{margin:0 0 8px}
+    .top{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px}
+    .nav{display:flex;gap:10px;flex-wrap:wrap;margin-top:8px;font-size:13px}.nav a{color:#2e7d32}
+    label{display:block;margin:10px 0 4px;font-size:14px}
+    input,select{width:100%;padding:11px;font-size:16px;border:1px solid #ccc;border-radius:8px;background:#fff}
+    button{padding:10px 14px;font-size:14px;border:0;border-radius:8px;background:#2e7d32;color:#fff}
+    button.gray{background:#757575}button.small{padding:7px 10px;font-size:13px}
+    .grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+    @media(max-width:600px){.grid{grid-template-columns:1fr}}
+    #msg{margin-top:10px;padding:10px;border-radius:8px;font-size:14px;display:none}
+    .err{background:#fdecea;color:#b71c1c}.okm{background:#e8f5e9;color:#1b5e20}
+    .g{border-bottom:1px solid #eee;padding:12px 0}.g:last-child{border-bottom:0}
+    .sub{font-size:13px;color:#666}
+    .tag{font-size:11px;padding:2px 8px;border-radius:10px;color:#fff;margin-left:6px}
+    .tag.ACTIVE{background:#2e7d32}.tag.INACTIVE{background:#9e9e9e}.tag.CLOSED{background:#455a64}
+    .actions{margin-top:6px;display:flex;gap:6px;flex-wrap:wrap}
+  </style>
+  <link rel="stylesheet" href="styles/style.css">
+</head>
+<body>
+<div class="wrap">
+  <div class="card">
+    <div class="top"><h1>Equb Groups</h1><button class="gray small" id="logout" type="button">Log out</button></div>
+    <div id="admin" class="sub"></div>
+    <div class="nav">
+      <a href="members.html">Members</a><a href="equb.html">Equb Groups</a>
+      <a href="collectors.html">Collectors</a><a href="correction-requests.html">Correction Requests</a>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3 id="formTitle">Add group</h3>
+    <div class="grid">
+      <div><label for="name">Group name</label><input id="name" type="text"></div>
+      <div><label for="amount">Contribution (ETB)</label><input id="amount" type="number" inputmode="decimal" min="0" step="0.01"></div>
+      <div><label for="freq">Frequency</label>
+        <select id="freq"><option>Daily</option><option>Weekly</option><option>Monthly</option></select></div>
+      <div><label for="max">Maximum members</label><input id="max" type="number" inputmode="numeric" min="1" step="1"></div>
+      <div><label for="start">Start date</label><input id="start" type="date"></div>
+      <div><label for="end">End date (optional)</label><input id="end" type="date"></div>
+    </div>
+    <div style="margin-top:12px;display:flex;gap:8px">
+      <button id="saveBtn" type="button">Save group</button>
+      <button id="cancelBtn" class="gray" type="button" style="display:none">Cancel edit</button>
+    </div>
+    <div id="msg"></div>
+  </div>
+
+  <div class="card"><div id="list"></div></div>
+</div>
+
+<script src="equb-core.js"></script>
+  <script src="admin-nav.js"></script>
+<script>
+  var $ = function (id) { return document.getElementById(id); };
+  var admin = equbGetAdminSession();
+  if (!admin) { window.location.href = "admin-login.html"; }
+  var editingId = null;
+  $("admin").textContent = admin ? "Logged in as " + admin.adminName : "";
+  $("logout").addEventListener("click", function () { localStorage.removeItem(EQUB_KEYS.adminSession); window.location.href = "admin-login.html"; });
+
+  function gName(g) { return g.name || g.groupName || g.id; }
+  function gAmt(g) { return Number(g.contributionAmount !== undefined ? g.contributionAmount : g.amount) || 0; }
+  function gStatus(g) { return g.status ? String(g.status).toUpperCase() : "ACTIVE"; }
+  function show(t, good) { $("msg").textContent = t; $("msg").className = good ? "okm" : "err"; $("msg").style.display = "block"; }
+
+  function resetForm() {
+    editingId = null;
+    ["name", "amount", "max", "end"].forEach(function (i) { $(i).value = ""; });
+    $("start").value = equbToday(); $("freq").value = "Daily";
+    $("formTitle").textContent = "Add group"; $("cancelBtn").style.display = "none";
+  }
+
+  function save() {
+    if (!requireAdmin()) return;
+    var name = $("name").value.trim().replace(/\s+/g, " ");
+    var amount = equbMoney($("amount").value);
+    var freq = $("freq").value;
+    var max = parseInt($("max").value, 10);
+    var start = $("start").value, end = $("end").value;
+    if (name.length < 2) return show("Enter the group name.", false);
+    if (!(amount > 0)) return show("Contribution must be greater than 0.", false);
+    if (["Daily", "Weekly", "Monthly"].indexOf(freq) === -1) return show("Choose a frequency.", false);
+    if (!(max >= 1)) return show("Maximum members must be at least 1.", false);
+    if (!start) return show("Choose a start date.", false);
+    if (end && end < start) return show("End date cannot be before the start date.", false);
+
+    var groups = equbLoad(EQUB_KEYS.groups, []);
+    if (groups.some(function (g) { return g.id !== editingId && gName(g).toLowerCase() === name.toLowerCase(); }))
+      return show("A group with this name already exists.", false);
+
+    if (editingId) {
+      var g = groups.find(function (x) { return x.id === editingId; });
+      if (!g) return show("Group not found.", false);
+      var used = equbActiveMemberCount(g.id);
+      if (max < used) return show("Maximum cannot be below the current " + used + " active members.", false);
+      if (g.name === undefined && g.groupName !== undefined) g.groupName = name; else g.name = name;
+      if (g.contributionAmount === undefined && g.amount !== undefined) g.amount = amount; else g.contributionAmount = amount;
+      g.frequency = freq; g.maxMembers = max; g.startDate = start; g.endDate = end || null;
+      g.updatedAt = new Date().toISOString();
+      if (!equbSave(EQUB_KEYS.groups, groups)) return show("Could not save.", false);
+      resetForm(); show("Group updated. New payments use the new contribution; old payments are unchanged.", true);
+    } else {
+      var id = equbUid("GRP");
+      groups.push({ id: id, name: name, contributionAmount: amount, frequency: freq, maxMembers: max,
+        startDate: start, endDate: end || null, status: "ACTIVE", createdAt: new Date().toISOString() });
+      if (!equbSave(EQUB_KEYS.groups, groups)) return show("Could not save.", false);
+      resetForm(); show("Group " + id + " created.", true);
+    }
+    render();
+  }
+
+  function requireAdmin() {
+    admin = equbGetAdminSession();
+    if (!admin) { window.location.href = "admin-login.html"; return null; }
+    return admin;
+  }
+
+  function setStatus(id, status) {
+    if (!requireAdmin()) return;
+    if (status !== "ACTIVE" && !confirm("Set this group to " + status + "? No new payments can be recorded for it.")) return;
+    var groups = equbLoad(EQUB_KEYS.groups, []);
+    var g = groups.find(function (x) { return x.id === id; });
+    if (!g) return;
+    g.status = status; g.updatedAt = new Date().toISOString();
+    equbSave(EQUB_KEYS.groups, groups); render();
+  }
+
+  function edit(id) {
+    var g = equbLoad(EQUB_KEYS.groups, []).find(function (x) { return x.id === id; });
+    if (!g) return;
+    editingId = id;
+    $("name").value = gName(g); $("amount").value = gAmt(g); $("freq").value = g.frequency || "Daily";
+    $("max").value = g.maxMembers || ""; $("start").value = g.startDate || ""; $("end").value = g.endDate || "";
+    $("formTitle").textContent = "Edit group " + id; $("cancelBtn").style.display = "inline-block";
+    window.scrollTo(0, 0);
+  }
+
+  function render() {
+    var groups = equbLoad(EQUB_KEYS.groups, []);
+    var list = $("list"); list.innerHTML = "";
+    if (!groups.length) { list.innerHTML = '<div class="sub">No groups yet.</div>'; return; }
+    groups.forEach(function (g) {
+      var st = gStatus(g), used = equbActiveMemberCount(g.id), max = Number(g.maxMembers) || 0;
+      var d = document.createElement("div"); d.className = "g";
+      d.innerHTML = '<div><b class="n"></b><span class="tag ' + st + '">' + st + '</span></div><div class="sub l1"></div><div class="sub l2"></div><div class="actions"></div>';
+      d.querySelector(".n").textContent = gName(g);
+      d.querySelector(".l1").textContent = g.id + " | " + equbFormat(gAmt(g)) + " " + (g.frequency || "");
+      d.querySelector(".l2").textContent = "Members: " + used + (max ? "/" + max : "") + " | " + (g.startDate || "-") + " to " + (g.endDate || "open");
+      var a = d.querySelector(".actions");
+      function btn(t, cls, fn) { var b = document.createElement("button"); b.className = "small " + cls; b.textContent = t; b.addEventListener("click", fn); a.appendChild(b); }
+      btn("Edit", "", function () { edit(g.id); });
+      if (st !== "ACTIVE") btn("Activate", "", function () { setStatus(g.id, "ACTIVE"); });
+      if (st === "ACTIVE") btn("Deactivate", "gray", function () { setStatus(g.id, "INACTIVE"); });
+      if (st !== "CLOSED") btn("Close", "gray", function () { setStatus(g.id, "CLOSED"); });
+      list.appendChild(d);
+    });
+  }
+
+  $("saveBtn").addEventListener("click", save);
+  $("cancelBtn").addEventListener("click", resetForm);
+  if (admin) { resetForm(); render(); }
+</script>
+</body>
+</html>

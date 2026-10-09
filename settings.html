@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Settings - Digital Equb</title>
+  <style>
+    *{box-sizing:border-box}
+    body{font-family:Arial,sans-serif;background:#f3f6f4;margin:0;padding:16px}
+    .wrap{max-width:800px;margin:0 auto}
+    .card{background:#fff;padding:16px;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,.08);margin-bottom:14px}
+    h1{margin:0;font-size:20px;color:#1b5e20}h3{margin:0 0 8px;font-size:15px}
+    .top{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px}
+    .nav{display:flex;gap:10px;flex-wrap:wrap;margin-top:8px;font-size:13px}.nav a{color:#2e7d32}
+    label{display:block;margin:10px 0 4px;font-size:14px}
+    input,select{width:100%;padding:11px;font-size:16px;border:1px solid #ccc;border-radius:8px;background:#fff}
+    button{padding:12px 14px;font-size:15px;border:0;border-radius:8px;background:#2e7d32;color:#fff}
+    button.gray{background:#757575;padding:9px 12px;font-size:14px}
+    .grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+    @media(max-width:600px){.grid{grid-template-columns:1fr}}
+    label.chk{display:flex;gap:8px;align-items:center;margin-top:10px;font-size:14px}
+    label.chk input{width:auto}
+    #msg{margin-bottom:12px;padding:10px;border-radius:8px;font-size:14px;display:none}
+    .err{background:#fdecea;color:#b71c1c}.okm{background:#e8f5e9;color:#1b5e20}
+    .small{font-size:12px;color:#666}
+    .note{background:#fff3e0;color:#e65100;padding:10px;border-radius:8px;font-size:13px}
+  </style>
+  <link rel="stylesheet" href="styles/style.css">
+</head>
+<body>
+<div class="wrap">
+  <div class="card">
+    <div class="top"><h1>Settings</h1><button class="gray" id="logout" type="button">Log out</button></div>
+    <div id="admin" class="small"></div>
+    <div class="nav"></div>
+  </div>
+  <div id="msg"></div>
+
+  <div class="card"><div class="note">Prototype settings are stored on this device only. The server must validate and enforce limits, permissions and security rules in production. Only the organization name is used by another page today (receipts). The other values are saved for the backend stage.</div></div>
+
+  <div class="card">
+    <h3>Organization</h3>
+    <label for="org">Organization name (shown on receipts)</label><input id="org" type="text">
+    <div class="grid">
+      <div><label for="currency">Currency code</label><input id="currency" type="text" maxlength="3" placeholder="ETB"></div>
+      <div><label for="country">Country</label><input id="country" type="text"></div>
+      <div><label for="city">City</label><input id="city" type="text"></div>
+      <div><label for="phone">Contact phone</label><input id="phone" type="tel"></div>
+    </div>
+    <label for="email">Contact email (optional)</label><input id="email" type="email">
+  </div>
+
+  <div class="card">
+    <h3>Financial defaults</h3>
+    <div class="grid">
+      <div><label for="defContribution">Default contribution (ETB)</label><input id="defContribution" type="number" min="0" step="0.01" inputmode="decimal"></div>
+      <div><label for="defLimit">Default daily cash limit per collector (ETB)</label><input id="defLimit" type="number" min="0" step="0.01" inputmode="decimal"></div>
+      <div><label for="defCollateral">Default collateral per collector (ETB)</label><input id="defCollateral" type="number" min="0" step="0.01" inputmode="decimal"></div>
+      <div><label for="dueDays">Collectors settle cash within (days)</label><input id="dueDays" type="number" min="0" step="1" inputmode="numeric"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>Notification preferences</h3>
+    <label class="chk"><input type="checkbox" id="nCorr"> Correction events</label>
+    <label class="chk"><input type="checkbox" id="nSettle"> Settlement events</label>
+    <label class="chk"><input type="checkbox" id="nPay"> Payout events</label>
+    <label class="chk"><input type="checkbox" id="nSms" disabled> SMS (needs the backend and a provider)</label>
+  </div>
+
+  <div class="card">
+    <h3>Admin profile and security</h3>
+    <div class="small" id="profile"></div>
+    <div class="small" style="margin-top:6px">Password changes and session rules cannot be stored safely in a browser. They are part of the backend stage.</div>
+  </div>
+
+  <button id="save" type="button" style="width:100%">Save settings</button>
+</div>
+
+<script src="equb-core.js"></script>
+<script src="admin-nav.js"></script>
+<script>
+  var $ = function (id) { return document.getElementById(id); };
+  var admin = equbGetAdminSession();
+  if (!admin) { window.location.href = "admin-login.html"; }
+  window.onerror = function (m, s, l) { show("Page error: " + m + " (line " + l + ")", false); };
+  $("logout").addEventListener("click", function () { localStorage.removeItem(EQUB_KEYS.adminSession); window.location.href = "admin-login.html"; });
+  function show(t, good) { $("msg").textContent = t; $("msg").className = good ? "okm" : "err"; $("msg").style.display = "block"; window.scrollTo(0, 0); }
+
+  var DEFAULTS = { organizationName: "Digital Equb", currency: "ETB", country: "Ethiopia", city: "", phone: "", email: "",
+    defaultContribution: 0, defaultDailyCashLimit: 0, defaultCollateral: 0, settlementDueDays: 1,
+    notifyCorrections: true, notifySettlements: true, notifyPayouts: true };
+
+  function current() {
+    var s = equbLoad(EQUB_KEYS.settings, null);
+    return (s && typeof s === "object" && !Array.isArray(s)) ? s : null;
+  }
+
+  function fillForm() {
+    var s = Object.assign({}, DEFAULTS, current() || {});
+    $("org").value = s.organizationName || s.orgName || s.name || ""; $("currency").value = s.currency; $("country").value = s.country;
+    $("city").value = s.city; $("phone").value = s.phone; $("email").value = s.email;
+    $("defContribution").value = s.defaultContribution; $("defLimit").value = s.defaultDailyCashLimit;
+    $("defCollateral").value = s.defaultCollateral; $("dueDays").value = s.settlementDueDays;
+    $("nCorr").checked = !!s.notifyCorrections; $("nSettle").checked = !!s.notifySettlements; $("nPay").checked = !!s.notifyPayouts;
+  }
+
+  function save() {
+    if (!equbGetAdminSession()) { window.location.href = "admin-login.html"; return; }
+    var org = $("org").value.trim().replace(/\s+/g, " "), cur = $("currency").value.trim().toUpperCase();
+    var phone = $("phone").value.replace(/[\s\-()]/g, ""), email = $("email").value.trim();
+    var dc = $("defContribution").value === "" ? 0 : equbMoney($("defContribution").value);
+    var dl = $("defLimit").value === "" ? 0 : equbMoney($("defLimit").value);
+    var dcol = $("defCollateral").value === "" ? 0 : equbMoney($("defCollateral").value);
+    var days = $("dueDays").value === "" ? 0 : parseInt($("dueDays").value, 10);
+
+    if (org.length < 2) return show("Enter the organization name.", false);
+    if (!/^[A-Z]{3}$/.test(cur)) return show("Currency must be a 3-letter code such as ETB.", false);
+    if (phone && !/^(\+251|0)[79]\d{8}$/.test(phone)) return show("Enter a valid contact phone, or leave it empty.", false);
+    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return show("Enter a valid email, or leave it empty.", false);
+    if (!(dc >= 0) || !(dl >= 0) || !(dcol >= 0)) return show("Amounts cannot be negative.", false);
+    if (!(days >= 0)) return show("Settlement days cannot be negative.", false);
+
+    var existing = equbLoad(EQUB_KEYS.settings, null), base = current();
+    if (existing !== null && !base) {
+      if (!confirm("Older settings data in a different format was found. It will be kept under 'legacyData' and replaced by the new format. Continue?")) return;
+      base = { legacyData: existing };
+    }
+    var s = Object.assign({}, base || {}, { organizationName: org, currency: cur, country: $("country").value.trim(), city: $("city").value.trim(),
+      phone: phone, email: email, defaultContribution: dc, defaultDailyCashLimit: dl, defaultCollateral: dcol, settlementDueDays: days,
+      notifyCorrections: $("nCorr").checked, notifySettlements: $("nSettle").checked, notifyPayouts: $("nPay").checked,
+      updatedAt: new Date().toISOString(), updatedBy: admin.adminId });
+    if (!equbSave(EQUB_KEYS.settings, s)) return show("Could not save the settings.", false);
+    show("Settings saved.", true);
+  }
+
+  if (admin) {
+    $("admin").textContent = "Logged in as " + admin.adminName;
+    $("profile").textContent = "Signed in as " + admin.adminName + " (" + admin.adminId + "). Session expires " + new Date(admin.expiresAt).toLocaleString() + ".";
+    fillForm();
+    $("save").addEventListener("click", save);
+  }
+</script>
+</body>
+</html>

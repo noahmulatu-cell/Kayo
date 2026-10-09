@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Record Collection - Digital Equb</title>
+  <style>
+    *{box-sizing:border-box}
+    body{font-family:Arial,sans-serif;background:#f3f6f4;margin:0;padding:16px}
+    .wrap{max-width:600px;margin:0 auto}
+    .card{background:#fff;padding:18px;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,.08);margin-bottom:14px}
+    h1{margin:0 0 4px;font-size:20px;color:#1b5e20}
+    .top{display:flex;justify-content:space-between;align-items:center;gap:8px}
+    .badge{font-size:12px;padding:4px 10px;border-radius:12px;color:#fff;white-space:nowrap}
+    .on{background:#2e7d32}.off{background:#e65100}
+    label{display:block;margin:12px 0 4px;font-size:14px;color:#333}
+    input,select{width:100%;padding:12px;font-size:16px;border:1px solid #ccc;border-radius:8px;background:#fff}
+    input[readonly]{background:#f0f0f0}
+    button.main{width:100%;margin-top:18px;padding:14px;font-size:16px;border:0;border-radius:8px;background:#2e7d32;color:#fff}
+    button.main:disabled{background:#9bbf9d}
+    .row{display:flex;justify-content:space-between;padding:6px 0;font-size:14px;border-bottom:1px solid #eee}
+    .row:last-child{border-bottom:0}
+    #msg{margin-top:14px;padding:10px;border-radius:8px;font-size:14px;display:none}
+    .err{background:#fdecea;color:#b71c1c}
+    .okm{background:#e8f5e9;color:#1b5e20}
+    .warn{background:#fff3e0;color:#e65100}
+    a.link{display:block;text-align:center;padding:12px;margin-top:10px;border-radius:8px;background:#455a64;color:#fff;text-decoration:none}
+    .nav{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+    .nav a{font-size:13px;color:#2e7d32}
+  </style>
+  <link rel="stylesheet" href="styles/style.css">
+</head>
+<body>
+<div class="wrap">
+
+  <div class="card">
+    <div class="top">
+      <div>
+        <h1>Record Collection</h1>
+        <div id="who" style="font-size:13px;color:#666"></div>
+      </div>
+      <span id="net" class="badge on">Online</span>
+    </div>
+    <div class="nav">
+      <a href="collector-dashboard.html">Dashboard</a>
+      <a href="offline-sync.html">Offline Sync</a>
+      <a href="collector-history.html">My History</a>
+      <a href="collector-corrections.html">Corrections</a>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="row"><span>Today's cash collected</span><b id="todayCash">-</b></div>
+    <div class="row"><span>Daily cash limit</span><b id="limit">-</b></div>
+    <div class="row"><span>Pending sync</span><b id="pendingCount">0</b></div>
+  </div>
+
+  <div class="card" id="formCard">
+    <label for="group">Equb group</label>
+    <select id="group"></select>
+
+    <label for="member">Member</label>
+    <select id="member"></select>
+
+    <label for="amount">Amount (ETB)</label>
+    <input id="amount" type="number" inputmode="decimal" min="0" step="0.01" placeholder="0.00">
+
+    <label for="method">Payment method</label>
+    <select id="method">
+      <option value="CASH">Cash</option>
+      <option value="MOBILE_MONEY">Mobile money</option>
+      <option value="BANK">Bank</option>
+    </select>
+
+    <label for="date">Payment date</label>
+    <input id="date" type="text" readonly>
+
+    <button id="save" class="main" type="button">Save Collection</button>
+    <div id="msg"></div>
+  </div>
+
+  <div class="card" id="doneCard" style="display:none">
+    <b style="color:#1b5e20">Collection saved</b>
+    <div id="doneInfo" style="font-size:14px;margin-top:6px"></div>
+    <a id="receiptLink" class="link" href="#">View Receipt</a>
+    <button id="another" class="main" type="button" style="background:#455a64">Record Another</button>
+  </div>
+
+</div>
+
+<script src="equb-core.js"></script>
+<script>
+  /* ---------- State ---------- */
+  var busy = false;                    // blocks double taps
+  var currentKey = equbUid("IDK");     // idempotency key for THIS attempt (reused on retry)
+  var session = null;
+
+  var els = {
+    who: document.getElementById("who"), net: document.getElementById("net"),
+    todayCash: document.getElementById("todayCash"), limit: document.getElementById("limit"),
+    pendingCount: document.getElementById("pendingCount"),
+    group: document.getElementById("group"), member: document.getElementById("member"),
+    amount: document.getElementById("amount"), method: document.getElementById("method"),
+    date: document.getElementById("date"), save: document.getElementById("save"),
+    msg: document.getElementById("msg"),
+    formCard: document.getElementById("formCard"), doneCard: document.getElementById("doneCard"),
+    doneInfo: document.getElementById("doneInfo"), receiptLink: document.getElementById("receiptLink"),
+    another: document.getElementById("another")
+  };
+
+  /* ---------- Helpers ---------- */
+  function gName(g) { return g.name || g.groupName || g.id; }
+  function gAmount(g) { return Number(g.contributionAmount !== undefined ? g.contributionAmount : g.amount) || 0; }
+  function mName(m) { return m.name || m.fullName || m.id; }
+  function isActiveStatus(s) { return !s || String(s).trim().toUpperCase() === "ACTIVE"; }
+
+  function show(text, type) {
+    els.msg.textContent = text;
+    els.msg.className = type;          // err | okm | warn
+    els.msg.style.display = "block";
+  }
+  function hideMsg() { els.msg.style.display = "none"; }
+
+  function kickOut() {
+    localStorage.removeItem(EQUB_KEYS.collectorSession);   // session only, never data
+    window.location.href = "collector-login.html";
+  }
+
+  /* Returns the fresh, eligible collector or null (redirects when not eligible) */
+  function requireCollector() {
+    session = equbGetCollectorSession();
+    if (!session) { kickOut(); return null; }
+    var me = equbLoad(EQUB_KEYS.collectors, []).find(function (c) { return c.id === session.collectorId; });
+    if (!me || me.status !== "ACTIVE") { kickOut(); return null; }
+    return me;
+  }
+
+  function updateNet() {
+    var online = navigator.onLine;
+    els.net.textContent = online ? "Online" : "Offline";
+    els.net.className = "badge " + (online ? "on" : "off");
+  }
+
+  function updateSummary(me) {
+    els.todayCash.textContent = equbFormat(equbCashForDate(me.id, equbToday()));
+    els.limit.textContent = me.dailyCashLimit > 0 ? equbFormat(me.dailyCashLimit) : "No limit";
+    var pending = equbLoad(EQUB_KEYS.pending, []).filter(function (p) { return p.collectorId === me.id; });
+    els.pendingCount.textContent = pending.length;
+  }
+
+  /* ---------- Group and member lists ---------- */
+  function loadGroups() {
+    var groups = equbLoad(EQUB_KEYS.groups, []).filter(function (g) {
+      return isActiveStatus(g.status);
+    });
+    els.group.innerHTML = "";
+    if (!groups.length) {
+      els.group.innerHTML = '<option value="">No active groups</option>';
+      loadMembersForGroup();
+      return;
+    }
+    groups.forEach(function (g) {
+      var o = document.createElement("option");
+      o.value = g.id;
+      o.textContent = gName(g) + " (" + g.id + ")";
+      els.group.appendChild(o);
+    });
+    loadMembersForGroup();
+  }
+
+  /* Only members with an ACTIVE membership record in the selected group */
+  function loadMembersForGroup() {
+    var groupId = els.group.value;
+    var allMembers = equbLoad(EQUB_KEYS.members, []);
+    var memberships = equbLoad(EQUB_KEYS.memberships, []).filter(function (ms) {
+      return ms.groupId === groupId && isActiveStatus(ms.status);
+    });
+    var list = [];
+    memberships.forEach(function (ms) {
+      var m = allMembers.find(function (x) { return x.id === ms.memberId; });
+      if (m && isActiveStatus(m.status) && !list.some(function (l) { return l.id === m.id; })) {
+        list.push(m);
+      }
+    });
+
+    els.member.innerHTML = "";
+    if (!list.length) {
+      els.member.innerHTML = '<option value="">No active members in this group</option>';
+    } else {
+      list.forEach(function (m) {
+        var o = document.createElement("option");
+        o.value = m.id;
+        o.textContent = mName(m) + " (" + m.id + ")";
+        els.member.appendChild(o);
+      });
+    }
+
+    /* Tell the collector when some active members are not linked to this group */
+    var totalActive = allMembers.filter(function (m) { return isActiveStatus(m.status); }).length;
+    if (list.length < totalActive) {
+      show("Showing " + list.length + " of " + totalActive + " active members. The others are not in this group. " +
+           "Link them in Members > Edit / Groups, or use fix-memberships.html.", "warn");
+    } else {
+      hideMsg();
+    }
+
+    var g = equbLoad(EQUB_KEYS.groups, []).find(function (x) { return x.id === groupId; });
+    els.amount.value = g && gAmount(g) > 0 ? gAmount(g) : "";
+  }
+
+  /* ---------- Save ---------- */
+  function saveCollection() {
+    if (busy) return;                      // double tap protection
+    busy = true;
+    els.save.disabled = true;
+    hideMsg();
+
+    try {
+      var me = requireCollector();         // re-check session and status at save time
+      if (!me) return;
+
+      var groupId = els.group.value;
+      var memberId = els.member.value;
+      var method = els.method.value;
+      var amount = equbMoney(els.amount.value);
+      var date = equbToday();
+
+      if (!groupId) { show("Select an Equb group.", "err"); return fail(); }
+      if (!memberId) { show("Select a member.", "err"); return fail(); }
+      if (["CASH", "MOBILE_MONEY", "BANK"].indexOf(method) === -1) { show("Select a valid payment method.", "err"); return fail(); }
+      if (!(amount > 0)) { show("Enter an amount greater than 0.", "err"); return fail(); }
+
+      var group = equbLoad(EQUB_KEYS.groups, []).find(function (g) { return g.id === groupId; });
+      var member = equbLoad(EQUB_KEYS.members, []).find(function (m) { return m.id === memberId; });
+      if (!group || !isActiveStatus(group.status)) { show("This group is not active.", "err"); return fail(); }
+      if (!member || !isActiveStatus(member.status)) { show("This member is not active.", "err"); return fail(); }
+
+      var isMember = equbLoad(EQUB_KEYS.memberships, []).some(function (ms) {
+        return ms.memberId === memberId && ms.groupId === groupId && isActiveStatus(ms.status);
+      });
+      if (!isMember) { show("This member does not belong to the selected group.", "err"); return fail(); }
+
+      /* Daily limit applies to physical CASH only */
+      if (method === "CASH" && me.dailyCashLimit > 0) {
+        var todayCash = equbCashForDate(me.id, date);
+        if (equbMoney(todayCash + amount) > me.dailyCashLimit) {
+          show("Daily cash limit exceeded. Collected today: " + equbFormat(todayCash) +
+               ", limit: " + equbFormat(me.dailyCashLimit) + ".", "err");
+          return fail();
+        }
+      }
+
+      var txs = equbLoad(EQUB_KEYS.transactions, []);
+
+      /* Same attempt already saved (retry after a slow screen)? Do not create a second one. */
+      var already = txs.find(function (t) { return t.idempotencyKey === currentKey; });
+      if (already) { return success(already, true); }
+
+      /* Warn about a possible repeat payment for the same member, group and date */
+      var repeat = txs.some(function (t) {
+        return t.type === "COLLECTION" && t.status === "COMPLETED" && t.memberId === memberId &&
+               t.groupId === groupId && t.date === date;
+      });
+      if (repeat && !confirm("This member already has a payment in this group today. Save another one?")) {
+        return fail();
+      }
+
+      var online = navigator.onLine;
+      var nowIso = new Date().toISOString();
+      var txn = {
+        id: equbUid("TXN"),
+        idempotencyKey: currentKey,
+        memberId: memberId, memberName: mName(member),
+        groupId: groupId, groupName: gName(group),
+        collectorId: me.id, collectorName: me.name,
+        amount: amount, method: method,
+        status: "COMPLETED", type: "COLLECTION",
+        date: date, createdAt: nowIso,
+        /* PENDING when offline. Online has no backend yet, so it is only LOCAL_ONLY, not SYNCED. */
+        syncStatus: online ? "LOCAL_ONLY" : "PENDING",
+        correctionRequestId: null, originalTransactionId: null,
+        reversalTransactionId: null, replacementTransactionId: null,
+        createdBy: me.id
+      };
+
+      var txsBefore = txs.slice();
+      txs.push(txn);
+      if (!equbSave(EQUB_KEYS.transactions, txs)) {
+        show("Could not save the transaction (storage full or blocked). Nothing was recorded.", "err");
+        return fail();
+      }
+
+      if (!online) {
+        var queue = equbLoad(EQUB_KEYS.pending, []);
+        var inQueue = queue.some(function (p) { return p.idempotencyKey === txn.idempotencyKey; });
+        if (!inQueue) {
+          queue.push(JSON.parse(JSON.stringify(txn)));
+          if (!equbSave(EQUB_KEYS.pending, queue)) {
+            equbSave(EQUB_KEYS.transactions, txsBefore);   // roll back so both lists agree
+            show("Could not add the payment to the offline queue. Nothing was recorded.", "err");
+            return fail();
+          }
+        }
+      }
+
+      success(txn, false);
+    } catch (e) {
+      console.error(e);
+      show("Unexpected error. Please try again.", "err");
+      fail();
+    }
+  }
+
+  function fail() {
+    busy = false;
+    els.save.disabled = false;
+  }
+
+  function success(txn, wasDuplicate) {
+    els.formCard.style.display = "none";
+    els.doneCard.style.display = "block";
+    els.doneInfo.innerHTML =
+      "Transaction: <b>" + txn.id + "</b><br>" +
+      "Member: " + txn.memberName + "<br>" +
+      "Amount: " + equbFormat(txn.amount) + " (" + txn.method + ")<br>" +
+      "Status: " + (txn.syncStatus === "PENDING" ? "Saved offline, waiting to sync" : "Saved on this device") +
+      (wasDuplicate ? "<br><i>This payment was already saved. No duplicate was created.</i>" : "");
+    els.receiptLink.href = "transaction-receipt.html?id=" + encodeURIComponent(txn.id);
+    currentKey = equbUid("IDK");           // new key for the next payment
+    var me = requireCollector();
+    if (me) updateSummary(me);
+    busy = false;
+  }
+
+  /* ---------- Start ---------- */
+  (function init() {
+    var me = requireCollector();
+    if (!me) return;
+    els.who.textContent = me.name + " (" + me.id + ")";
+    els.date.value = equbToday();
+    updateNet();
+    updateSummary(me);
+    loadGroups();
+
+    window.addEventListener("online", updateNet);
+    window.addEventListener("offline", updateNet);
+    els.group.addEventListener("change", loadMembersForGroup);
+    els.save.addEventListener("click", saveCollection);
+    els.another.addEventListener("click", function () {
+      els.doneCard.style.display = "none";
+      els.formCard.style.display = "block";
+      els.save.disabled = false;
+      els.date.value = equbToday();
+      hideMsg();
+      loadMembersForGroup();
+    });
+  })();
+</script>
+</body>
+</html>

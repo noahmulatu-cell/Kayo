@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Members - Digital Equb</title>
+  <style>
+    *{box-sizing:border-box}
+    body{font-family:Arial,sans-serif;background:#f3f6f4;margin:0;padding:16px}
+    .wrap{max-width:900px;margin:0 auto}
+    .card{background:#fff;padding:16px;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,.08);margin-bottom:14px}
+    h1{margin:0;font-size:20px;color:#1b5e20}
+    h3{margin:0 0 8px}
+    .top{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px}
+    .nav{display:flex;gap:10px;flex-wrap:wrap;margin-top:8px;font-size:13px}
+    .nav a{color:#2e7d32}
+    label{display:block;margin:10px 0 4px;font-size:14px}
+    input,select{width:100%;padding:11px;font-size:16px;border:1px solid #ccc;border-radius:8px;background:#fff}
+    button{padding:11px 14px;font-size:14px;border:0;border-radius:8px;background:#2e7d32;color:#fff}
+    button.gray{background:#757575}button.red{background:#c62828}button.small{padding:7px 10px;font-size:13px}
+    .grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+    @media(max-width:600px){.grid{grid-template-columns:1fr}}
+    #msg{margin-top:10px;padding:10px;border-radius:8px;font-size:14px;display:none}
+    .err{background:#fdecea;color:#b71c1c}.okm{background:#e8f5e9;color:#1b5e20}
+    .m{border-bottom:1px solid #eee;padding:10px 0}
+    .m:last-child{border-bottom:0}
+    .name{font-weight:bold}
+    .sub{font-size:13px;color:#666}
+    .tag{font-size:11px;padding:2px 8px;border-radius:10px;color:#fff;margin-left:6px}
+    .tag.ACTIVE{background:#2e7d32}.tag.INACTIVE{background:#9e9e9e}
+    .actions{margin-top:6px;display:flex;gap:6px;flex-wrap:wrap}
+    .gl{display:flex;justify-content:space-between;align-items:center;padding:6px 0;font-size:14px}
+  </style>
+  <link rel="stylesheet" href="styles/style.css">
+</head>
+<body>
+<div class="wrap">
+
+  <div class="card">
+    <div class="top">
+      <h1>Members</h1>
+      <button class="gray small" id="logout" type="button">Log out</button>
+    </div>
+    <div id="admin" class="sub"></div>
+  <div class="nav">
+  <a href="index.html">Dashboard</a>
+  <a href="members.html">Members</a>
+  <a href="equb.html">Equb Groups</a>
+  <a href="collectors.html">Collectors</a>
+  <a href="transactions.html">Transactions</a>
+  <a href="correction-requests.html">Correction Requests</a>
+  <a href="settlements.html">Settlements</a>
+</div>
+  </div>
+
+  <div class="card">
+    <h3 id="formTitle">Add member</h3>
+    <div class="grid">
+      <div><label for="fname">Full name</label><input id="fname" type="text" placeholder="Full name"></div>
+      <div><label for="fphone">Phone</label><input id="fphone" type="tel" inputmode="tel" placeholder="0911000000"></div>
+    </div>
+    <div id="groupRow">
+      <label for="fgroup">Add to Equb group (optional)</label>
+      <select id="fgroup"></select>
+    </div>
+    <div style="margin-top:12px;display:flex;gap:8px">
+      <button id="saveBtn" type="button">Save member</button>
+      <button id="cancelBtn" class="gray" type="button" style="display:none">Cancel edit</button>
+    </div>
+    <div id="msg"></div>
+
+    <div id="membershipBox" style="display:none;margin-top:14px;border-top:1px solid #eee;padding-top:10px">
+      <b>Group memberships</b>
+      <div id="msList"></div>
+      <div style="display:flex;gap:8px;margin-top:8px">
+        <select id="addGroup"></select>
+        <button id="addGroupBtn" type="button" style="white-space:nowrap">Add to group</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="grid">
+      <div><label for="search">Search (name, phone or ID)</label><input id="search" type="text" placeholder="Search"></div>
+      <div><label for="filter">Status</label>
+        <select id="filter"><option value="ALL">All</option><option value="ACTIVE">Active</option><option value="INACTIVE">Inactive</option></select>
+      </div>
+    </div>
+    <div id="count" class="sub" style="margin-top:8px"></div>
+    <div id="list"></div>
+  </div>
+
+</div>
+
+<script src="equb-core.js"></script>
+  <script src="admin-nav.js"></script>
+<script>
+  /* ---------- Guard ---------- */
+  var admin = equbGetAdminSession();
+  if (!admin) { window.location.href = "admin-login.html"; }
+
+  equbSeedDemoData();
+
+  var editingId = null;
+  var $ = function (id) { return document.getElementById(id); };
+
+  $("admin").textContent = admin ? "Logged in as " + admin.adminName : "";
+  $("logout").addEventListener("click", function () {
+    localStorage.removeItem(EQUB_KEYS.adminSession);
+    window.location.href = "admin-login.html";
+  });
+
+  /* ---------- Helpers ---------- */
+  function mName(m) { return m.name || m.fullName || m.id; }
+  function mStatus(m) { return (m.status ? String(m.status).toUpperCase() : "ACTIVE"); }
+  function gName(g) { return g.name || g.groupName || g.id; }
+  function activeGroups() {
+    return equbLoad(EQUB_KEYS.groups, []).filter(function (g) { return !g.status || String(g.status).toUpperCase() === "ACTIVE"; });
+  }
+  function cleanPhone(p) { return String(p).replace(/[\s\-()]/g, ""); }
+  function validPhone(p) { return /^(\+251|0)[79]\d{8}$/.test(p); }
+  function normPhone(p) { return p.indexOf("+251") === 0 ? "0" + p.slice(4) : p; }
+
+  function show(text, good) {
+    var m = $("msg");
+    m.textContent = text; m.className = good ? "okm" : "err"; m.style.display = "block";
+  }
+  function hideMsg() { $("msg").style.display = "none"; }
+
+  function groupOptions(select, withBlank) {
+    select.innerHTML = "";
+    if (withBlank) { var b = document.createElement("option"); b.value = ""; b.textContent = "No group"; select.appendChild(b); }
+    activeGroups().forEach(function (g) {
+      var o = document.createElement("option");
+      o.value = g.id;
+      var max = Number(g.maxMembers) || 0;
+      o.textContent = gName(g) + " (" + equbActiveMemberCount(g.id) + (max ? "/" + max : "") + ")";
+      select.appendChild(o);
+    });
+  }
+
+  /* Returns "" on success or an error message */
+  function addMembership(memberId, groupId) {
+    var groups = equbLoad(EQUB_KEYS.groups, []);
+    var g = groups.find(function (x) { return x.id === groupId; });
+    if (!g) return "Group not found.";
+    var ms = equbLoad(EQUB_KEYS.memberships, []);
+    if (ms.some(function (x) { return x.memberId === memberId && x.groupId === groupId && x.status === "ACTIVE"; })) {
+      return "This member is already in " + gName(g) + ".";
+    }
+    var max = Number(g.maxMembers) || 0;
+    if (max > 0 && equbActiveMemberCount(groupId) >= max) return gName(g) + " is full (" + max + " members).";
+    ms.push({ id: equbUid("MSP"), memberId: memberId, groupId: groupId,
+              joinedAt: new Date().toISOString(), status: "ACTIVE", leftAt: null });
+    return equbSave(EQUB_KEYS.memberships, ms) ? "" : "Could not save the membership.";
+  }
+
+  /* ---------- Save member ---------- */
+  function saveMember() {
+    hideMsg();
+    var name = $("fname").value.trim().replace(/\s+/g, " ");
+    var phone = cleanPhone($("fphone").value);
+    if (name.length < 2) { show("Enter the member's full name.", false); return; }
+    if (!validPhone(phone)) { show("Enter a valid phone, e.g. 0911000000 or +251911000000.", false); return; }
+    phone = normPhone(phone);
+
+    var members = equbLoad(EQUB_KEYS.members, []);
+    var dup = members.find(function (m) { return normPhone(cleanPhone(m.phone || "")) === phone && m.id !== editingId; });
+    if (dup) { show("Phone already used by " + mName(dup) + " (" + dup.id + ").", false); return; }
+
+    if (editingId) {
+      var m = members.find(function (x) { return x.id === editingId; });
+      if (!m) { show("Member not found.", false); return; }
+      if (m.fullName !== undefined && m.name === undefined) m.fullName = name; else m.name = name;
+      m.phone = phone;
+      m.updatedAt = new Date().toISOString();
+      equbSave(EQUB_KEYS.members, members);
+      show("Member updated.", true);
+      render();
+      return;
+    }
+
+    var nameDup = members.find(function (m) { return mName(m).toLowerCase() === name.toLowerCase(); });
+    if (nameDup && !confirm("A member named \"" + mName(nameDup) + "\" already exists. Add anyway?")) return;
+
+    var id = equbUid("MEM");
+    members.push({ id: id, name: name, phone: phone, status: "ACTIVE", createdAt: new Date().toISOString() });
+    if (!equbSave(EQUB_KEYS.members, members)) { show("Could not save the member.", false); return; }
+
+    var gid = $("fgroup").value, note = "";
+    if (gid) {
+      var err = addMembership(id, gid);
+      note = err ? " (Not added to group: " + err + ")" : " and added to the group.";
+    }
+    resetForm();
+    show("Member " + id + " saved" + note, true);
+    render();
+  }
+
+  function resetForm() {
+    editingId = null;
+    $("fname").value = ""; $("fphone").value = "";
+    $("formTitle").textContent = "Add member";
+    $("groupRow").style.display = "block";
+    $("membershipBox").style.display = "none";
+    $("cancelBtn").style.display = "none";
+    groupOptions($("fgroup"), true);
+  }
+
+  function startEdit(id) {
+    var m = equbLoad(EQUB_KEYS.members, []).find(function (x) { return x.id === id; });
+    if (!m) return;
+    editingId = id;
+    $("fname").value = mName(m); $("fphone").value = m.phone || "";
+    $("formTitle").textContent = "Edit member " + id;
+    $("groupRow").style.display = "none";
+    $("cancelBtn").style.display = "inline-block";
+    $("membershipBox").style.display = "block";
+    groupOptions($("addGroup"), false);
+    renderMemberships();
+    hideMsg();
+    window.scrollTo(0, 0);
+  }
+
+  function renderMemberships() {
+    var groups = equbLoad(EQUB_KEYS.groups, []);
+    var ms = equbLoad(EQUB_KEYS.memberships, []).filter(function (x) { return x.memberId === editingId && x.status === "ACTIVE"; });
+    var box = $("msList");
+    box.innerHTML = "";
+    if (!ms.length) { box.innerHTML = '<div class="sub">Not in any group yet.</div>'; return; }
+    ms.forEach(function (x) {
+      var g = groups.find(function (y) { return y.id === x.groupId; });
+      var row = document.createElement("div");
+      row.className = "gl";
+      row.innerHTML = "<span>" + (g ? gName(g) : x.groupId) + "</span>";
+      var b = document.createElement("button");
+      b.className = "red small"; b.textContent = "Remove";
+      b.addEventListener("click", function () { leaveGroup(x.id); });
+      row.appendChild(b);
+      box.appendChild(row);
+    });
+  }
+
+  function leaveGroup(membershipId) {
+    if (!confirm("Remove this member from the group? Their payment history is kept.")) return;
+    var ms = equbLoad(EQUB_KEYS.memberships, []);
+    var x = ms.find(function (y) { return y.id === membershipId; });
+    if (x) { x.status = "LEFT"; x.leftAt = new Date().toISOString(); equbSave(EQUB_KEYS.memberships, ms); }
+    renderMemberships(); groupOptions($("addGroup"), false); render();
+  }
+
+  function toggleStatus(id) {
+    var members = equbLoad(EQUB_KEYS.members, []);
+    var m = members.find(function (x) { return x.id === id; });
+    if (!m) return;
+    var next = mStatus(m) === "ACTIVE" ? "INACTIVE" : "ACTIVE";
+    if (next === "INACTIVE" && !confirm("Deactivate " + mName(m) + "? They cannot make new payments. History is kept.")) return;
+    m.status = next; m.updatedAt = new Date().toISOString();
+    equbSave(EQUB_KEYS.members, members);
+    render();
+  }
+
+  /* ---------- List ---------- */
+  function render() {
+    var members = equbLoad(EQUB_KEYS.members, []);
+    var groups = equbLoad(EQUB_KEYS.groups, []);
+    var ms = equbLoad(EQUB_KEYS.memberships, []);
+    var q = $("search").value.trim().toLowerCase();
+    var f = $("filter").value;
+
+    var rows = members.filter(function (m) {
+      if (f !== "ALL" && mStatus(m) !== f) return false;
+      if (!q) return true;
+      return mName(m).toLowerCase().indexOf(q) > -1 || String(m.phone || "").indexOf(q) > -1 || String(m.id).toLowerCase().indexOf(q) > -1;
+    });
+
+    $("count").textContent = rows.length + " of " + members.length + " member(s)";
+    var list = $("list");
+    list.innerHTML = "";
+    if (!rows.length) { list.innerHTML = '<div class="sub" style="padding:10px 0">No members found.</div>'; return; }
+
+    rows.forEach(function (m) {
+      var gs = ms.filter(function (x) { return x.memberId === m.id && x.status === "ACTIVE"; }).map(function (x) {
+        var g = groups.find(function (y) { return y.id === x.groupId; });
+        return g ? gName(g) : x.groupId;
+      });
+      var div = document.createElement("div");
+      div.className = "m";
+      div.innerHTML = '<div><span class="name"></span><span class="tag ' + mStatus(m) + '">' + mStatus(m) + '</span></div>' +
+                      '<div class="sub"></div><div class="sub"></div><div class="actions"></div>';
+      div.querySelector(".name").textContent = mName(m);
+      div.querySelectorAll(".sub")[0].textContent = m.id + "  |  " + (m.phone || "no phone");
+      div.querySelectorAll(".sub")[1].textContent = "Groups: " + (gs.length ? gs.join(", ") : "none");
+      var a = div.querySelector(".actions");
+      var e = document.createElement("button"); e.className = "small"; e.textContent = "Edit / Groups";
+      e.addEventListener("click", function () { startEdit(m.id); });
+      var t = document.createElement("button"); t.className = "small gray";
+      t.textContent = mStatus(m) === "ACTIVE" ? "Deactivate" : "Activate";
+      t.addEventListener("click", function () { toggleStatus(m.id); });
+      a.appendChild(e); a.appendChild(t);
+      list.appendChild(div);
+    });
+  }
+
+  /* ---------- Events ---------- */
+  $("saveBtn").addEventListener("click", saveMember);
+  $("cancelBtn").addEventListener("click", function () { resetForm(); hideMsg(); });
+  $("search").addEventListener("input", render);
+  $("filter").addEventListener("change", render);
+  $("addGroupBtn").addEventListener("click", function () {
+    var gid = $("addGroup").value;
+    if (!gid) { show("No active group available.", false); return; }
+    var err = addMembership(editingId, gid);
+    if (err) { show(err, false); return; }
+    hideMsg(); renderMemberships(); groupOptions($("addGroup"), false); render();
+  });
+
+  if (admin) { resetForm(); render(); }
+</script>
+</body>
+</html>

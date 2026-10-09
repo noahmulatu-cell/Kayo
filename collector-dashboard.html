@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Collector Dashboard - Digital Equb</title>
+  <style>
+    *{box-sizing:border-box}
+    body{font-family:Arial,sans-serif;background:#f3f6f4;margin:0;padding:16px}
+    .wrap{max-width:600px;margin:0 auto}
+    .card{background:#fff;padding:16px;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,.08);margin-bottom:14px}
+    h1{margin:0 0 4px;font-size:20px;color:#1b5e20}
+    h3{margin:0 0 8px;font-size:15px}
+    .row{display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid #eee;font-size:14px}
+    .row:last-child{border-bottom:0}
+    .row.t{font-weight:bold;border-top:2px solid #2e7d32}
+    .small{font-size:12px;color:#666}
+    .menu{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+    .menu a,button{display:block;text-align:center;padding:14px 8px;border-radius:8px;background:#2e7d32;color:#fff;text-decoration:none;border:0;font-size:15px}
+    .menu a.g{background:#455a64}
+    button.out{background:#777;width:100%}
+    .badge{background:#e65100;border-radius:10px;padding:1px 7px;font-size:12px;margin-left:4px}
+  </style>
+  <link rel="stylesheet" href="styles/style.css">
+</head>
+<body>
+<div class="wrap">
+  <div class="card">
+    <h1 id="hello">Collector Dashboard</h1>
+    <div id="sessionInfo" class="small"></div>
+  </div>
+
+  <div class="card">
+    <h3>Today (<span id="today"></span>)</h3>
+    <div class="row"><span>Net collection</span><b id="tNet">-</b></div>
+    <div class="row"><span>Physical cash (net)</span><b id="tCash">-</b></div>
+    <div class="row"><span>Electronic (net)</span><b id="tElec">-</b></div>
+    <div class="row"><span>Daily cash limit</span><b id="limit">-</b></div>
+  </div>
+
+  <div class="card">
+    <h3>All time</h3>
+    <div class="row"><span>Original collections</span><b id="aGross">-</b></div>
+    <div class="row"><span>Reversals</span><b id="aRev">-</b></div>
+    <div class="row"><span>Corrected payments</span><b id="aCor">-</b></div>
+    <div class="row t"><span>Net collection</span><b id="aNet">-</b></div>
+    <div class="row"><span>Cash settled</span><b id="aSettled">-</b></div>
+    <div class="row t"><span>Cash still in hand</span><b id="aHand">-</b></div>
+    <div class="row"><span>Waiting to sync</span><b id="aPending">0</b></div>
+  </div>
+
+  <div class="card menu">
+    <a href="collector-collection.html">Record Collection</a>
+    <a href="collector-history.html" class="g">My History</a>
+    <a href="offline-sync.html" class="g">Offline Sync <span id="pbadge" class="badge" style="display:none"></span></a>
+    <a href="collector-corrections.html" class="g">Corrections</a>
+  </div>
+
+  <div class="card"><button class="out" id="logout" type="button">Log out</button></div>
+</div>
+
+<script src="equb-core.js"></script>
+<script>
+  var $ = function (id) { return document.getElementById(id); };
+  var session = equbGetCollectorSession();
+  var me = null;
+  if (!session) { window.location.href = "collector-login.html"; }
+  else {
+    me = equbLoad(EQUB_KEYS.collectors, []).find(function (c) { return c.id === session.collectorId; });
+    if (!me || me.status !== "ACTIVE") {
+      localStorage.removeItem(EQUB_KEYS.collectorSession);
+      window.location.href = "collector-login.html";
+    }
+  }
+  if (me) {
+    var mine = equbLoad(EQUB_KEYS.transactions, []).filter(function (t) { return t.collectorId === me.id; });
+    var today = equbToday();
+    var st = equbSummarize(mine.filter(function (t) { return t.date === today; }));
+    var sa = equbSummarize(mine);
+    var settled = equbLoad(EQUB_KEYS.settlements, [])
+      .filter(function (x) { return x.collectorId === me.id && x.status !== "VOIDED"; })
+      .reduce(function (s, x) { return s + (Number(x.amount) || 0); }, 0);
+    var pending = equbLoad(EQUB_KEYS.pending, []).filter(function (p) { return p.collectorId === me.id; }).length;
+
+    $("hello").textContent = "Welcome, " + me.name;
+    $("sessionInfo").textContent = "Session expires: " + new Date(session.expiresAt).toLocaleString();
+    $("today").textContent = today;
+    $("tNet").textContent = equbFormat(st.net);
+    $("tCash").textContent = equbFormat(st.cash);
+    $("tElec").textContent = equbFormat(st.electronic);
+    $("limit").textContent = me.dailyCashLimit > 0 ? equbFormat(me.dailyCashLimit) : "No limit";
+    $("aGross").textContent = equbFormat(sa.grossOriginal);
+    $("aRev").textContent = equbFormat(sa.reversals);
+    $("aCor").textContent = equbFormat(sa.corrected);
+    $("aNet").textContent = equbFormat(sa.net);
+    $("aSettled").textContent = equbFormat(settled);
+    $("aHand").textContent = equbFormat(equbCashInHand(me.id));
+    $("aPending").textContent = pending;
+    if (pending > 0) { $("pbadge").textContent = pending; $("pbadge").style.display = "inline"; }
+  }
+  $("logout").addEventListener("click", function () {
+    localStorage.removeItem(EQUB_KEYS.collectorSession);
+    window.location.href = "collector-login.html";
+  });
+</script>
+</body>
+</html>

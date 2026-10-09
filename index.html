@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Dashboard - Digital Equb</title>
+  <style>
+    *{box-sizing:border-box}
+    body{font-family:Arial,sans-serif;background:#f3f6f4;margin:0;padding:16px}
+    .wrap{max-width:900px;margin:0 auto}
+    .card{background:#fff;padding:16px;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,.08);margin-bottom:14px}
+    h1{margin:0;font-size:20px;color:#1b5e20}h3{margin:0 0 8px;font-size:15px}
+    .top{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px}
+    .nav{display:flex;gap:10px;flex-wrap:wrap;margin-top:8px;font-size:13px}.nav a{color:#2e7d32}
+    .cols{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+    @media(max-width:600px){.cols{grid-template-columns:1fr}}
+    .row{display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid #eee;font-size:14px}
+    .row:last-child{border-bottom:0}.row.t{font-weight:bold;border-top:2px solid #2e7d32}
+    .small{font-size:12px;color:#666}
+    .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+    @media(max-width:600px){.stats{grid-template-columns:1fr 1fr}}
+    .stat{background:#f7f9f7;border-radius:10px;padding:12px;text-align:center}
+    .stat b{display:block;font-size:20px;color:#1b5e20}.stat span{font-size:12px;color:#666}
+    .stat a{color:inherit;text-decoration:none}
+    button{padding:8px 12px;font-size:14px;border:0;border-radius:8px;background:#757575;color:#fff}
+    .item{border-bottom:1px solid #eee;padding:8px 0;font-size:14px;display:flex;justify-content:space-between;gap:8px}
+    .item:last-child{border-bottom:0}.neg{color:#b71c1c}
+  </style>
+  <link rel="stylesheet" href="styles/style.css">
+</head>
+<body>
+<div class="wrap">
+  <div class="card">
+    <div class="top"><h1>Admin Dashboard</h1><button id="logout" type="button">Log out</button></div>
+    <div id="admin" class="small"></div>
+    <div class="nav">
+      <a href="index.html">Dashboard</a><a href="members.html">Members</a><a href="equb.html">Equb Groups</a>
+      <a href="collectors.html">Collectors</a><a href="transactions.html">Transactions</a>
+      <a href="correction-requests.html">Correction Requests</a><a href="settlements.html">Settlements</a>
+    </div>
+  </div>
+
+  <div class="card"><div class="stats">
+    <div class="stat"><a href="members.html"><b id="nMembers">0</b><span>Active members</span></a></div>
+    <div class="stat"><a href="equb.html"><b id="nGroups">0</b><span>Active groups</span></a></div>
+    <div class="stat"><a href="collectors.html"><b id="nCollectors">0</b><span>Active collectors</span></a></div>
+    <div class="stat"><a href="correction-requests.html"><b id="nCorr">0</b><span>Corrections to review</span></a></div>
+  </div></div>
+
+  <div class="cols">
+    <div class="card">
+      <h3>Today (<span id="today"></span>)</h3>
+      <div class="row"><span>Original collections</span><b id="tGross">-</b></div>
+      <div class="row"><span>Reversals</span><b id="tRev">-</b></div>
+      <div class="row"><span>Corrected payments</span><b id="tCor">-</b></div>
+      <div class="row t"><span>Net collection</span><b id="tNet">-</b></div>
+      <div class="row"><span>Physical cash (net)</span><b id="tCash">-</b></div>
+      <div class="row"><span>Electronic (net)</span><b id="tElec">-</b></div>
+      <div class="row"><span>Payments recorded</span><b id="tCount">-</b></div>
+    </div>
+    <div class="card">
+      <h3>All time</h3>
+      <div class="row"><span>Original collections</span><b id="aGross">-</b></div>
+      <div class="row"><span>Reversals</span><b id="aRev">-</b></div>
+      <div class="row"><span>Corrected payments</span><b id="aCor">-</b></div>
+      <div class="row t"><span>Net collection</span><b id="aNet">-</b></div>
+      <div class="row"><span>Physical cash (net)</span><b id="aCash">-</b></div>
+      <div class="row"><span>Cash settled</span><b id="aSettled">-</b></div>
+      <div class="row t"><span>Cash outstanding with collectors</span><b id="aOut">-</b></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>Collectors with unsettled cash</h3>
+    <div id="outList"></div>
+    <div style="margin-top:8px"><a href="settlements.html" style="color:#2e7d32;font-size:14px">Go to Settlements</a></div>
+  </div>
+
+  <div class="card">
+    <h3>Recent transactions</h3>
+    <div id="recent"></div>
+    <div style="margin-top:8px"><a href="transactions.html" style="color:#2e7d32;font-size:14px">See all transactions</a></div>
+  </div>
+</div>
+
+<script src="equb-core.js"></script>
+  <script src="admin-nav.js"></script>
+<script>
+  var $ = function (id) { return document.getElementById(id); };
+  var admin = equbGetAdminSession();
+  if (!admin) { window.location.href = "admin-login.html"; }
+  window.onerror = function (m, s, l) { $("admin").textContent = "Page error: " + m + " (line " + l + ")"; };
+  $("logout").addEventListener("click", function () { localStorage.removeItem(EQUB_KEYS.adminSession); window.location.href = "admin-login.html"; });
+
+  function active(s) { return !s || String(s).trim().toUpperCase() === "ACTIVE"; }
+
+  if (admin) {
+    $("admin").textContent = "Logged in as " + admin.adminName;
+    var txs = equbLoad(EQUB_KEYS.transactions, []);
+    var today = equbToday();
+    var st = equbSummarize(txs.filter(function (t) { return t.date === today; }));
+    var sa = equbSummarize(txs);
+    var collectors = equbLoad(EQUB_KEYS.collectors, []);
+
+    $("nMembers").textContent = equbLoad(EQUB_KEYS.members, []).filter(function (m) { return active(m.status); }).length;
+    $("nGroups").textContent = equbLoad(EQUB_KEYS.groups, []).filter(function (g) { return active(g.status); }).length;
+    $("nCollectors").textContent = collectors.filter(function (c) { return active(c.status); }).length;
+    $("nCorr").textContent = equbLoad(EQUB_KEYS.corrections, []).filter(function (r) { return r.status === "PENDING" || r.status === "APPROVED"; }).length;
+
+    $("today").textContent = today;
+    $("tGross").textContent = equbFormat(st.grossOriginal);
+    $("tRev").textContent = equbFormat(st.reversals);
+    $("tCor").textContent = equbFormat(st.corrected);
+    $("tNet").textContent = equbFormat(st.net);
+    $("tCash").textContent = equbFormat(st.cash);
+    $("tElec").textContent = equbFormat(st.electronic);
+    $("tCount").textContent = st.count;
+
+    var settled = equbLoad(EQUB_KEYS.settlements, []).filter(function (x) { return x.status !== "VOIDED"; })
+      .reduce(function (s, x) { return s + (Number(x.amount) || 0); }, 0);
+    $("aGross").textContent = equbFormat(sa.grossOriginal);
+    $("aRev").textContent = equbFormat(sa.reversals);
+    $("aCor").textContent = equbFormat(sa.corrected);
+    $("aNet").textContent = equbFormat(sa.net);
+    $("aCash").textContent = equbFormat(sa.cash);
+    $("aSettled").textContent = equbFormat(settled);
+    $("aOut").textContent = equbFormat(equbMoney(sa.cash - settled));
+
+    var outBox = $("outList"), any = false;
+    collectors.forEach(function (c) {
+      var hand = equbCashInHand(c.id);
+      if (hand === 0) return;
+      any = true;
+      var d = document.createElement("div"); d.className = "item";
+      var a = document.createElement("span"); a.textContent = c.name + " (" + c.id + ")";
+      var b = document.createElement("b"); b.textContent = equbFormat(hand); if (hand < 0) b.className = "neg";
+      d.appendChild(a); d.appendChild(b); outBox.appendChild(d);
+    });
+    if (!any) outBox.innerHTML = '<div class="small">No unsettled cash.</div>';
+
+    var recent = txs.slice().sort(function (a, b) { return String(b.createdAt || "").localeCompare(String(a.createdAt || "")); }).slice(0, 8);
+    var rb = $("recent");
+    if (!recent.length) rb.innerHTML = '<div class="small">No transactions yet.</div>';
+    recent.forEach(function (t) {
+      var amt = Number(t.amount) || 0;
+      var d = document.createElement("div"); d.className = "item";
+      var a = document.createElement("span");
+      a.textContent = (t.date || "") + " | " + (t.memberName || t.memberId) + " | " + (t.type || "COLLECTION") + " | " + (t.method || "");
+      var b = document.createElement("b"); b.textContent = (amt > 0 ? "+" : "") + equbFormat(amt); if (amt < 0) b.className = "neg";
+      d.appendChild(a); d.appendChild(b); rb.appendChild(d);
+    });
+  }
+</script>
+</body>
+</html>

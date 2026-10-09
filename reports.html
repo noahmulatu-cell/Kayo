@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Reports - Digital Equb</title>
+  <style>
+    *{box-sizing:border-box}
+    body{font-family:Arial,sans-serif;background:#f3f6f4;margin:0;padding:16px}
+    .wrap{max-width:1000px;margin:0 auto}
+    .card{background:#fff;padding:16px;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,.08);margin-bottom:14px}
+    h1{margin:0;font-size:20px;color:#1b5e20}h3{margin:0 0 8px;font-size:15px}
+    .top{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px}
+    .nav{display:flex;gap:10px;flex-wrap:wrap;margin-top:8px;font-size:13px}.nav a{color:#2e7d32}
+    .grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+    @media(max-width:700px){.grid{grid-template-columns:1fr 1fr}}
+    label{display:block;margin:8px 0 4px;font-size:13px}
+    input,select{width:100%;padding:10px;font-size:15px;border:1px solid #ccc;border-radius:8px;background:#fff}
+    button{padding:10px 14px;font-size:14px;border:0;border-radius:8px;background:#2e7d32;color:#fff}
+    button.gray{background:#757575}
+    .row{display:flex;justify-content:space-between;padding:6px 0;font-size:14px;border-bottom:1px solid #eee}
+    .row:last-child{border-bottom:0}.row.t{font-weight:bold;border-top:2px solid #2e7d32}
+    .small{font-size:12px;color:#666}
+    .scroll{overflow-x:auto}
+    table{border-collapse:collapse;width:100%;font-size:13px;min-width:620px}
+    th,td{padding:7px 8px;border-bottom:1px solid #eee;text-align:right;white-space:nowrap}
+    th:first-child,td:first-child{text-align:left}
+    th{background:#f7f9f7}
+    tr.total td{font-weight:bold;border-top:2px solid #2e7d32}
+    .neg{color:#b71c1c}
+  </style>
+  <link rel="stylesheet" href="styles/style.css">
+</head>
+<body>
+<div class="wrap">
+  <div class="card">
+    <div class="top"><h1>Reports</h1><button class="gray" id="logout" type="button">Log out</button></div>
+    <div id="admin" class="small"></div>
+    <div class="nav"></div>
+  </div>
+
+  <div class="card">
+    <div class="grid">
+      <div><label for="from">From</label><input id="from" type="date"></div>
+      <div><label for="to">To</label><input id="to" type="date"></div>
+      <div><label for="col">Collector</label><select id="col"></select></div>
+      <div><label for="grp">Equb group</label><select id="grp"></select></div>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:10px">
+      <button id="today" type="button">Today</button>
+      <button id="month" type="button">This month</button>
+      <button id="reset" class="gray" type="button">Reset</button>
+      <button id="csv" type="button" style="margin-left:auto">Export CSV</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>Summary</h3>
+    <div class="small" id="scope" style="margin-bottom:6px"></div>
+    <div class="row"><span>Original collections</span><span id="sGross"></span></div>
+    <div class="row"><span>Reversals</span><span id="sRev"></span></div>
+    <div class="row"><span>Corrected payments</span><span id="sCor"></span></div>
+    <div class="row t"><span>Net collection</span><span id="sNet"></span></div>
+    <div class="row"><span>Physical cash (net)</span><span id="sCash"></span></div>
+    <div class="row"><span>Electronic (net)</span><span id="sElec"></span></div>
+    <div class="row"><span>Payments recorded (original collections only)</span><span id="sCount"></span></div>
+    <div class="row"><span>Cash settled in this period</span><span id="sSettled"></span></div>
+  </div>
+
+  <div class="card"><h3>By collector</h3><div class="scroll" id="tCol"></div></div>
+  <div class="card"><h3>By Equb group</h3><div class="scroll" id="tGrp"></div></div>
+  <div class="card"><h3>By day</h3><div class="scroll" id="tDay"></div></div>
+  <div class="card">
+    <h3>Cash outstanding with collectors (right now)</h3>
+    <div class="small" style="margin-bottom:6px">All-time cash minus settlements as of today. It ignores the date and group filters.</div>
+    <div class="scroll" id="tOut"></div>
+  </div>
+</div>
+
+<script src="equb-core.js"></script>
+<script src="admin-nav.js"></script>
+<script>
+  var $ = function (id) { return document.getElementById(id); };
+  var admin = equbGetAdminSession();
+  if (!admin) { window.location.href = "admin-login.html"; }
+  window.onerror = function (m, s, l) { $("admin").textContent = "Page error: " + m + " (line " + l + ")"; };
+  $("logout").addEventListener("click", function () { localStorage.removeItem(EQUB_KEYS.adminSession); window.location.href = "admin-login.html"; });
+
+  var HEAD = ["Name", "ID", "Original", "Reversals", "Corrected", "Net", "Cash", "Electronic", "Payments"];
+
+  /* The ONE place numbers are computed. Screen and CSV both use it. */
+  function build() {
+    var f = { from: $("from").value, to: $("to").value, col: $("col").value, grp: $("grp").value };
+    var cols = equbLoad(EQUB_KEYS.collectors, []), groups = equbLoad(EQUB_KEYS.groups, []);
+    var nameC = {}, nameG = {};
+    cols.forEach(function (c) { nameC[c.id] = c.name; });
+    groups.forEach(function (g) { nameG[g.id] = g.name || g.groupName || g.id; });
+
+    var txs = equbLoad(EQUB_KEYS.transactions, []).filter(function (t) {
+      if (f.from && (t.date || "") < f.from) return false;
+      if (f.to && (t.date || "") > f.to) return false;
+      if (f.col !== "ALL" && t.collectorId !== f.col) return false;
+      if (f.grp !== "ALL" && t.groupId !== f.grp) return false;
+      return true;
+    });
+    txs.forEach(function (t) {
+      if (!nameC[t.collectorId]) nameC[t.collectorId] = t.collectorName || t.collectorId;
+      if (!nameG[t.groupId]) nameG[t.groupId] = t.groupName || t.groupId;
+    });
+
+    function rows(keyFn, names) {
+      var m = {};
+      txs.forEach(function (t) { var k = keyFn(t) || "-"; (m[k] = m[k] || []).push(t); });
+      return Object.keys(m).sort().map(function (k) { return { id: k, name: names ? (names[k] || k) : k, s: equbSummarize(m[k]) }; });
+    }
+
+    var settled = equbLoad(EQUB_KEYS.settlements, []).filter(function (x) {
+      if (x.status === "VOIDED") return false;
+      if (f.from && (x.date || "") < f.from) return false;
+      if (f.to && (x.date || "") > f.to) return false;
+      if (f.col !== "ALL" && x.collectorId !== f.col) return false;
+      return true;
+    }).reduce(function (s, x) { return s + (Number(x.amount) || 0); }, 0);
+
+    var outstanding = cols.filter(function (c) { return f.col === "ALL" || c.id === f.col; })
+      .map(function (c) { return { id: c.id, name: c.name, hand: equbCashInHand(c.id) }; });
+
+    return { f: f, count: txs.length, summary: equbSummarize(txs), settled: equbMoney(settled),
+      byCol: rows(function (t) { return t.collectorId; }, nameC), byGrp: rows(function (t) { return t.groupId; }, nameG),
+      byDay: rows(function (t) { return t.date; }, null), outstanding: outstanding };
+  }
+
+  function fmtRow(r) {
+    var s = r.s;
+    return [r.name, r.id, equbFormat(s.grossOriginal), equbFormat(s.reversals), equbFormat(s.corrected), equbFormat(s.net), equbFormat(s.cash), equbFormat(s.electronic), String(s.count)];
+  }
+  function table(box, headers, body, totalRow) {
+    box.innerHTML = "";
+    if (!body.length) { box.innerHTML = '<div class="small">No data for these filters.</div>'; return; }
+    var t = document.createElement("table"), h = document.createElement("tr");
+    headers.forEach(function (x) { var th = document.createElement("th"); th.textContent = x; h.appendChild(th); });
+    var thead = document.createElement("thead"); thead.appendChild(h); t.appendChild(thead);
+    var tb = document.createElement("tbody");
+    body.concat(totalRow ? [totalRow] : []).forEach(function (r, i) {
+      var tr = document.createElement("tr");
+      if (totalRow && i === body.length) tr.className = "total";
+      r.forEach(function (c) { var td = document.createElement("td"); td.textContent = c; if (String(c).indexOf("-") === 0 && c.length > 1 && /\d/.test(c)) td.className = "neg"; tr.appendChild(td); });
+      tb.appendChild(tr);
+    });
+    t.appendChild(tb); box.appendChild(t);
+  }
+
+  function render() {
+    var r = build(), s = r.summary;
+    $("scope").textContent = r.count + " transaction record(s) match the filters.";
+    $("sGross").textContent = equbFormat(s.grossOriginal); $("sRev").textContent = equbFormat(s.reversals);
+    $("sCor").textContent = equbFormat(s.corrected); $("sNet").textContent = equbFormat(s.net);
+    $("sCash").textContent = equbFormat(s.cash); $("sElec").textContent = equbFormat(s.electronic);
+    $("sCount").textContent = s.count; $("sSettled").textContent = equbFormat(r.settled);
+    var total = ["Total", "", equbFormat(s.grossOriginal), equbFormat(s.reversals), equbFormat(s.corrected), equbFormat(s.net), equbFormat(s.cash), equbFormat(s.electronic), String(s.count)];
+    table($("tCol"), HEAD, r.byCol.map(fmtRow), total);
+    table($("tGrp"), HEAD, r.byGrp.map(fmtRow), total);
+    table($("tDay"), ["Date", "", "Original", "Reversals", "Corrected", "Net", "Cash", "Electronic", "Payments"], r.byDay.map(fmtRow), total);
+    var sum = r.outstanding.reduce(function (a, o) { return a + o.hand; }, 0);
+    table($("tOut"), ["Collector", "ID", "Cash in hand"], r.outstanding.map(function (o) { return [o.name, o.id, equbFormat(o.hand)]; }), ["Total", "", equbFormat(equbMoney(sum))]);
+  }
+
+  function cell(v) {
+    var s = v === null || v === undefined ? "" : String(v);
+    if (/^[=+\-@]/.test(s) && isNaN(Number(s))) s = "'" + s;
+    return '"' + s.replace(/"/g, '""') + '"';
+  }
+  function n2(n) { return equbMoney(n).toFixed(2); }
+  function sRow(r) { var s = r.s; return [r.name, r.id, n2(s.grossOriginal), n2(s.reversals), n2(s.corrected), n2(s.net), n2(s.cash), n2(s.electronic), s.count]; }
+
+  function exportCsv() {
+    var r = build(), s = r.summary, L = [];
+    function add(arr) { L.push(arr.map(cell).join(",")); }
+    add(["Report", "from", r.f.from || "all", "to", r.f.to || "all", "collector", r.f.col, "group", r.f.grp]);
+    L.push("");
+    add(["SUMMARY"]); add(["original", n2(s.grossOriginal)]); add(["reversals", n2(s.reversals)]); add(["corrected", n2(s.corrected)]);
+    add(["net", n2(s.net)]); add(["cash_net", n2(s.cash)]); add(["electronic_net", n2(s.electronic)]); add(["payments", s.count]); add(["cash_settled", n2(r.settled)]);
+    function section(title, list) { L.push(""); add([title]); add(["name", "id", "original", "reversals", "corrected", "net", "cash", "electronic", "payments"]); list.forEach(function (x) { add(sRow(x)); }); }
+    section("BY COLLECTOR", r.byCol); section("BY GROUP", r.byGrp); section("BY DAY", r.byDay);
+    L.push(""); add(["CASH OUTSTANDING NOW"]); add(["name", "id", "cash_in_hand"]);
+    r.outstanding.forEach(function (o) { add([o.name, o.id, n2(o.hand)]); });
+    var blob = new Blob(["\ufeff" + L.join("\r\n")], { type: "text/csv;charset=utf-8" });
+    var a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "report-" + equbToday() + ".csv";
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  }
+
+  if (admin) {
+    $("admin").textContent = "Logged in as " + admin.adminName;
+    var c = $("col"); c.innerHTML = '<option value="ALL">All collectors</option>';
+    equbLoad(EQUB_KEYS.collectors, []).forEach(function (x) { var o = document.createElement("option"); o.value = x.id; o.textContent = x.name + " (" + x.id + ")"; c.appendChild(o); });
+    var g = $("grp"); g.innerHTML = '<option value="ALL">All groups</option>';
+    equbLoad(EQUB_KEYS.groups, []).forEach(function (x) { var o = document.createElement("option"); o.value = x.id; o.textContent = (x.name || x.groupName || x.id); g.appendChild(o); });
+    ["from", "to", "col", "grp"].forEach(function (i) { $(i).addEventListener("change", render); });
+    $("today").addEventListener("click", function () { $("from").value = equbToday(); $("to").value = equbToday(); render(); });
+    $("month").addEventListener("click", function () { var t = equbToday(); $("from").value = t.slice(0, 8) + "01"; $("to").value = t; render(); });
+    $("reset").addEventListener("click", function () { $("from").value = ""; $("to").value = ""; $("col").value = "ALL"; $("grp").value = "ALL"; render(); });
+    $("csv").addEventListener("click", exportCsv);
+    render();
+  }
+</script>
+</body>
+</html>

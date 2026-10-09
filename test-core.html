@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Core Test</title>
+  <style>body{font-family:sans-serif;padding:16px} .ok{color:green} .bad{color:red}</style>
+  <link rel="stylesheet" href="styles/style.css">
+</head>
+<body>
+  <h2>Equb Core Test</h2>
+  <div id="out"></div>
+  <script src="equb-core.js"></script>
+  <script>
+    equbSeedDemoData();
+    var out = document.getElementById("out");
+    function check(name, pass) {
+      out.innerHTML += "<p class='" + (pass ? "ok" : "bad") + "'>" +
+        (pass ? "PASS: " : "FAIL: ") + name + "</p>";
+    }
+
+    check("Members seeded", equbLoad(EQUB_KEYS.members, []).length === 3);
+    check("Memberships seeded", equbLoad(EQUB_KEYS.memberships, []).length === 3);
+    check("IDs are unique", equbUid("TXN") !== equbUid("TXN"));
+    check("Date format YYYY-MM-DD", /^\d{4}-\d{2}-\d{2}$/.test(equbToday()));
+
+    // Test E: 500 original, -500 reversal, +600 corrected = net 600
+    var sample = [
+      { type: "COLLECTION", method: "CASH", amount: 500 },
+      { type: "REVERSAL",   method: "CASH", amount: -500 },
+      { type: "CORRECTED",  method: "CASH", amount: 600 }
+    ];
+    var s = equbSummarize(sample);
+    check("Net = 600 (got " + s.net + ")", s.net === 600);
+    check("Cash = 600", s.cash === 600);
+
+    // Test G: CASH 500 -> MOBILE_MONEY 500, physical cash net = 0
+    var s2 = equbSummarize([
+      { type: "COLLECTION", method: "CASH", amount: 500 },
+      { type: "REVERSAL",   method: "CASH", amount: -500 },
+      { type: "CORRECTED",  method: "MOBILE_MONEY", amount: 500 }
+    ]);
+    check("Cash-to-mobile: cash = 0 (got " + s2.cash + ")", s2.cash === 0);
+    check("Cash-to-mobile: electronic = 500", s2.electronic === 500);
+  </script>
+</body>
+</html>

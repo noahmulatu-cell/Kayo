@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Admin Login - Digital Equb</title>
+  <style>
+    *{box-sizing:border-box}
+    body{font-family:Arial,sans-serif;background:#f3f6f4;margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:16px}
+    .card{background:#fff;width:100%;max-width:380px;padding:24px;border-radius:12px;box-shadow:0 2px 12px rgba(0,0,0,.1)}
+    h1{margin:0 0 4px;font-size:22px;color:#1b5e20}
+    p.sub{margin:0 0 20px;color:#666;font-size:14px}
+    label{display:block;margin:12px 0 4px;font-size:14px}
+    input{width:100%;padding:12px;font-size:16px;border:1px solid #ccc;border-radius:8px}
+    button{width:100%;margin-top:18px;padding:13px;font-size:16px;border:0;border-radius:8px;background:#2e7d32;color:#fff}
+    #msg{margin-top:14px;padding:10px;border-radius:8px;font-size:14px;display:none;background:#fdecea;color:#b71c1c}
+    .hint{margin-top:16px;font-size:12px;color:#888;text-align:center}
+  </style>
+  <link rel="stylesheet" href="styles/style.css">
+</head>
+<body>
+  <div class="card">
+    <h1>Admin Login</h1>
+    <p class="sub">Digital Equb Management System</p>
+    <label for="user">Admin username</label>
+    <input id="user" type="text" autocomplete="username" placeholder="admin">
+    <label for="pw">Password</label>
+    <input id="pw" type="password" autocomplete="current-password" placeholder="Password">
+    <button id="btn" type="button">Log in</button>
+    <div id="msg"></div>
+    <div class="hint">Demo login: admin / admin123<br>Prototype only. Real security needs a backend.</div>
+  </div>
+
+  <script src="equb-core.js"></script>
+  <script>
+    /* DEMO ONLY. Never put real admin passwords in frontend code. */
+    var DEMO_ADMIN = { id: "ADM-0001", username: "admin", password: "admin123", name: "Administrator" };
+    var SESSION_HOURS = 8;
+
+    if (equbGetAdminSession()) { window.location.href = "index.html"; }
+
+    function login() {
+      var u = document.getElementById("user").value.trim();
+      var p = document.getElementById("pw").value;
+      var msg = document.getElementById("msg");
+      if (u.toLowerCase() !== DEMO_ADMIN.username || p !== DEMO_ADMIN.password) {
+        msg.textContent = "Incorrect username or password.";
+        msg.style.display = "block";
+        return;
+      }
+      var now = Date.now();
+      equbSave(EQUB_KEYS.adminSession, {
+        adminId: DEMO_ADMIN.id, adminName: DEMO_ADMIN.name,
+        loginAt: now, expiresAt: now + SESSION_HOURS * 3600000
+      });
+      window.location.href = "index.html";
+    }
+    document.getElementById("btn").addEventListener("click", login);
+    document.getElementById("pw").addEventListener("keydown", function (e) { if (e.key === "Enter") login(); });
+  </script>
+</body>
+</html>

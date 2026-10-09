@@ -1,0 +1,460 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Correction Requests - Digital Equb</title>
+  <style>
+    *{box-sizing:border-box}
+    body{font-family:Arial,sans-serif;background:#f3f6f4;margin:0;padding:16px}
+    .wrap{max-width:900px;margin:0 auto}
+    .card{background:#fff;padding:16px;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,.08);margin-bottom:14px}
+    h1{margin:0;font-size:20px;color:#1b5e20}
+    .top{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px}
+    .nav{display:flex;gap:10px;flex-wrap:wrap;margin-top:8px;font-size:13px}
+    .nav a{color:#2e7d32}
+    label{display:block;margin:8px 0 4px;font-size:13px}
+    select,textarea{width:100%;padding:10px;font-size:15px;border:1px solid #ccc;border-radius:8px;background:#fff;font-family:inherit}
+    textarea{min-height:60px}
+    button{padding:10px 14px;font-size:14px;border:0;border-radius:8px;background:#2e7d32;color:#fff}
+    button.gray{background:#757575}button.red{background:#c62828}button.blue{background:#1565c0}
+    button:disabled{opacity:.5}
+    .small{font-size:12px;color:#666}
+    .tag{font-size:11px;padding:2px 8px;border-radius:10px;color:#fff;margin-left:6px}
+    .tag.PENDING{background:#e65100}.tag.APPROVED{background:#1565c0}
+    .tag.PROCESSED{background:#2e7d32}.tag.REJECTED{background:#c62828}.tag.MANUAL{background:#6a1b9a}
+    .req{border-bottom:1px solid #eee;padding:14px 0}
+    .req:last-child{border-bottom:0}
+    .grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:8px}
+    @media(max-width:600px){.grid{grid-template-columns:1fr}}
+    .box{background:#f7f9f7;border-radius:8px;padding:10px;font-size:13px}
+    .box b{display:block;margin-bottom:4px}
+    .ln{display:flex;justify-content:space-between;gap:8px;padding:2px 0}
+    .neg{color:#b71c1c}
+    .actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+    #msg{margin-bottom:12px;padding:10px;border-radius:8px;font-size:14px;display:none}
+    .err{background:#fdecea;color:#b71c1c}.okm{background:#e8f5e9;color:#1b5e20}
+  </style>
+  <link rel="stylesheet" href="styles/style.css">
+</head>
+<body>
+<div class="wrap">
+
+  <div class="card">
+    <div class="top">
+      <h1>Correction Requests</h1>
+      <button class="gray" id="logout" type="button">Log out</button>
+    </div>
+    <div id="admin" class="small"></div>
+    <div class="nav">
+      <a href="members.html">Members</a>
+      <a href="correction-requests.html">Correction Requests</a>
+      <a href="collector-login.html">Collector Portal</a>
+    </div>
+  </div>
+
+  <div id="msg"></div>
+
+  <div class="card">
+    <label for="filter">Show</label>
+    <select id="filter">
+      <option value="OPEN">Needs action (Pending + Approved)</option>
+      <option value="PENDING">Pending</option>
+      <option value="APPROVED">Approved</option>
+      <option value="PROCESSED">Processed</option>
+      <option value="REJECTED">Rejected</option>
+      <option value="ALL">All</option>
+    </select>
+    <div id="count" class="small" style="margin-top:6px"></div>
+  </div>
+
+  <div class="card"><div id="list"></div></div>
+</div>
+
+<script src="equb-core.js"></script>
+  <script src="admin-nav.js"></script>
+<script>
+  var $ = function (id) { return document.getElementById(id); };
+  var admin = equbGetAdminSession();
+  if (!admin) { window.location.href = "admin-login.html"; }
+  var busy = false;
+
+  window.onerror = function (msg, src, line) { show("Page error: " + msg + " (line " + line + ")", false); };
+
+  $("admin").textContent = admin ? "Logged in as " + admin.adminName + " (" + admin.adminId + ")" : "";
+  $("logout").addEventListener("click", function () {
+    localStorage.removeItem(EQUB_KEYS.adminSession);
+    window.location.href = "admin-login.html";
+  });
+
+  var METHOD = { CASH: "Cash", MOBILE_MONEY: "Mobile money", BANK: "Bank" };
+  var TYPE_LABEL = {
+    WRONG_AMOUNT: "Wrong amount", WRONG_MEMBER: "Wrong member", WRONG_GROUP: "Wrong group",
+    WRONG_PAYMENT_METHOD: "Wrong payment method", DUPLICATE_TRANSACTION: "Duplicate payment", OTHER: "Other"
+  };
+
+  function isActiveStatus(s) { return !s || String(s).trim().toUpperCase() === "ACTIVE"; }
+  function mName(m) { return m.name || m.fullName || m.id; }
+  function gName(g) { return g.name || g.groupName || g.id; }
+
+  function show(text, good) {
+    $("msg").textContent = text;
+    $("msg").className = good ? "okm" : "err";
+    $("msg").style.display = "block";
+    window.scrollTo(0, 0);
+  }
+
+  /* Admin session must still be valid for every action */
+  function requireAdmin() {
+    admin = equbGetAdminSession();
+    if (!admin) { window.location.href = "admin-login.html"; return null; }
+    return admin;
+  }
+
+  /* ---------- What the replacement would look like ---------- */
+  function buildReplacement(r, orig) {
+    if (r.correctionType === "DUPLICATE_TRANSACTION" || r.manualReviewOnly) return null;
+    var c = r.requestedChanges || {};
+    return {
+      memberId: c.memberId || orig.memberId, memberName: c.memberName || orig.memberName,
+      groupId: c.groupId || orig.groupId, groupName: c.groupName || orig.groupName,
+      amount: c.amount !== undefined ? equbMoney(c.amount) : equbMoney(orig.amount),
+      method: c.method || orig.method
+    };
+  }
+
+  /* Checks the requested values are still valid. Returns "" or an error message. */
+  function validateChanges(r, orig) {
+    if (r.manualReviewOnly || r.correctionType === "OTHER") return "";
+    if (r.correctionType === "DUPLICATE_TRANSACTION") return "";
+    var rep = buildReplacement(r, orig);
+    if (!(rep.amount > 0)) return "Corrected amount is not valid.";
+    if (["CASH", "MOBILE_MONEY", "BANK"].indexOf(rep.method) === -1) return "Corrected payment method is not valid.";
+    var changed = rep.amount !== equbMoney(orig.amount) || rep.method !== orig.method ||
+                  rep.memberId !== orig.memberId || rep.groupId !== orig.groupId;
+    if (!changed) return "The request changes nothing. An unchanged replacement is not allowed.";
+
+    if (rep.memberId !== orig.memberId || rep.groupId !== orig.groupId) {
+      var member = equbLoad(EQUB_KEYS.members, []).find(function (m) { return m.id === rep.memberId; });
+      var group = equbLoad(EQUB_KEYS.groups, []).find(function (g) { return g.id === rep.groupId; });
+      if (!member || !isActiveStatus(member.status)) return "The corrected member is not active.";
+      if (!group || !isActiveStatus(group.status)) return "The corrected group is not active.";
+      var ok = equbLoad(EQUB_KEYS.memberships, []).some(function (ms) {
+        return ms.memberId === rep.memberId && ms.groupId === rep.groupId && isActiveStatus(ms.status);
+      });
+      if (!ok) return "The corrected member does not belong to the corrected group.";
+    }
+    return "";
+  }
+
+  /* ---------- Notifications ---------- */
+  function notify(type, message, r) {
+    var notes = equbLoad(EQUB_KEYS.notifications, []);
+    notes.push({
+      id: equbUid("NTF"), type: type, recipientRole: "COLLECTOR", recipientId: r.collectorId,
+      message: message, relatedId: r.id, read: false, createdAt: new Date().toISOString()
+    });
+    equbSave(EQUB_KEYS.notifications, notes);
+  }
+
+  /* ---------- Actions ---------- */
+  function review(id, decision, note) {
+    if (busy) return;
+    var a = requireAdmin(); if (!a) return;
+    busy = true;
+    try {
+      var reqs = equbLoad(EQUB_KEYS.corrections, []);
+      var r = reqs.find(function (x) { return x.id === id; });
+      if (!r) { show("Request not found.", false); return; }
+
+      if (decision === "APPROVE") {
+        if (r.status !== "PENDING") { show("Only pending requests can be approved.", false); return; }
+        var orig = equbLoad(EQUB_KEYS.transactions, []).find(function (t) { return t.id === r.transactionId; });
+        if (!orig) { show("The original transaction was not found.", false); return; }
+        var err = validateChanges(r, orig);
+        if (err) { show("Cannot approve: " + err + " Reject it with a note.", false); return; }
+        r.status = "APPROVED";
+      } else {
+        if (r.status !== "PENDING" && r.status !== "APPROVED") { show("This request was already finished.", false); return; }
+        if (!note || note.trim().length < 5) { show("Enter a note (at least 5 characters) explaining the rejection.", false); return; }
+        r.status = "REJECTED";
+      }
+      r.reviewedAt = new Date().toISOString();
+      r.reviewedBy = a.adminId;
+      r.reviewedByName = a.adminName;
+      if (note && note.trim()) r.adminNote = note.trim();
+
+      if (!equbSave(EQUB_KEYS.corrections, reqs)) { show("Could not save. Nothing changed.", false); return; }
+      notify(decision === "APPROVE" ? "CORRECTION_APPROVED" : "CORRECTION_REJECTED",
+             "Your correction request " + r.id + " was " + (decision === "APPROVE" ? "approved." : "rejected."), r);
+      show("Request " + r.id + (decision === "APPROVE" ? " approved." : " rejected."), true);
+    } finally { busy = false; render(); }
+  }
+
+  /* Manual close for OTHER requests: no financial entries are created */
+  function closeManually(id, note) {
+    if (busy) return;
+    var a = requireAdmin(); if (!a) return;
+    busy = true;
+    try {
+      var reqs = equbLoad(EQUB_KEYS.corrections, []);
+      var r = reqs.find(function (x) { return x.id === id; });
+      if (!r || r.status !== "APPROVED" || !r.manualReviewOnly) { show("This request cannot be closed manually.", false); return; }
+      if (!note || note.trim().length < 10) { show("Describe what was done (at least 10 characters).", false); return; }
+      r.status = "PROCESSED";
+      r.processedAt = new Date().toISOString();
+      r.processedBy = a.adminId;
+      r.adminNote = note.trim();
+      r.closedWithoutFinancialEntries = true;
+      if (!equbSave(EQUB_KEYS.corrections, reqs)) { show("Could not save. Nothing changed.", false); return; }
+      notify("CORRECTION_PROCESSED", "Your request " + r.id + " was reviewed and closed by the administrator.", r);
+      show("Request closed. No financial entries were created.", true);
+    } finally { busy = false; render(); }
+  }
+
+  /* ---------- Process: create reversal + replacement together ---------- */
+  function processRequest(id) {
+    if (busy) return;
+    var a = requireAdmin(); if (!a) return;
+    busy = true;
+    try {
+      /* Read everything fresh from storage, never from the screen */
+      var reqs = equbLoad(EQUB_KEYS.corrections, []);
+      var r = reqs.find(function (x) { return x.id === id; });
+      if (!r) { show("Request not found.", false); return; }
+      if (r.status === "PROCESSED") { show("This request was already processed. Nothing was created.", false); return; }
+      if (r.status !== "APPROVED") { show("Approve the request before processing it.", false); return; }
+      if (r.manualReviewOnly) { show("Other requests are closed manually. No automatic entries are created.", false); return; }
+
+      var txsOriginalCopy = JSON.stringify(equbLoad(EQUB_KEYS.transactions, []));
+      var txs = JSON.parse(txsOriginalCopy);
+      var orig = txs.find(function (t) { return t.id === r.transactionId; });
+      if (!orig) { show("The original transaction was not found.", false); return; }
+      if ((orig.type || "COLLECTION") !== "COLLECTION" || (orig.status || "COMPLETED") !== "COMPLETED") {
+        show("Only an original completed collection can be corrected.", false); return;
+      }
+      if (orig.reversalTransactionId || orig.replacementTransactionId) {
+        show("This payment was already reversed. Nothing was created.", false); return;
+      }
+      if (orig.collectorId !== r.collectorId) { show("The request does not match the payment's collector.", false); return; }
+
+      var revKey = "REV-" + r.id, repKey = "REP-" + r.id;
+      if (txs.some(function (t) { return t.idempotencyKey === revKey || t.idempotencyKey === repKey; })) {
+        show("Entries for this request already exist. Nothing was created.", false); return;
+      }
+
+      var err = validateChanges(r, orig);
+      if (err) { show("Cannot process: " + err, false); return; }
+
+      var now = new Date().toISOString();
+      var collector = equbLoad(EQUB_KEYS.collectors, []).find(function (c) { return c.id === orig.collectorId; });
+
+      /* 1) Reversal: negative, same method, same business date, same collector */
+      var reversal = {
+        id: equbUid("TXN"), idempotencyKey: revKey,
+        memberId: orig.memberId, memberName: orig.memberName,
+        groupId: orig.groupId, groupName: orig.groupName,
+        collectorId: orig.collectorId, collectorName: orig.collectorName || (collector && collector.name) || "",
+        amount: -equbMoney(orig.amount), method: orig.method,
+        status: "COMPLETED", type: "REVERSAL",
+        date: orig.date, createdAt: now, syncStatus: "LOCAL_ONLY",
+        correctionRequestId: r.id, originalTransactionId: orig.id,
+        reversalTransactionId: null, replacementTransactionId: null,
+        createdBy: a.adminId, processedBy: a.adminId
+      };
+      txs.push(reversal);
+
+      /* 2) Replacement (not for duplicates) */
+      var replacement = null;
+      var rep = buildReplacement(r, orig);
+      if (rep) {
+        replacement = {
+          id: equbUid("TXN"), idempotencyKey: repKey,
+          memberId: rep.memberId, memberName: rep.memberName,
+          groupId: rep.groupId, groupName: rep.groupName,
+          collectorId: orig.collectorId, collectorName: orig.collectorName || (collector && collector.name) || "",
+          amount: rep.amount, method: rep.method,
+          status: "COMPLETED", type: "CORRECTED",
+          date: orig.date, createdAt: now, syncStatus: "LOCAL_ONLY",
+          correctionRequestId: r.id, originalTransactionId: orig.id,
+          reversalTransactionId: null, replacementTransactionId: null,
+          createdBy: a.adminId, processedBy: a.adminId
+        };
+        txs.push(replacement);
+      }
+
+      /* 3) Link the original (amounts and fields are not changed) */
+      orig.reversalTransactionId = reversal.id;
+      orig.replacementTransactionId = replacement ? replacement.id : null;
+      orig.correctionRequestId = r.id;
+
+      /* 4) Save transactions, then the request. If the second save fails, undo the first. */
+      if (!equbSave(EQUB_KEYS.transactions, txs)) { show("Could not save. Nothing was changed.", false); return; }
+
+      r.status = "PROCESSED";
+      r.processedAt = now;
+      r.processedBy = a.adminId;
+      r.processedByName = a.adminName;
+      r.reversalTransactionId = reversal.id;
+      r.replacementTransactionId = replacement ? replacement.id : null;
+      if (!equbSave(EQUB_KEYS.corrections, reqs)) {
+        equbSave(EQUB_KEYS.transactions, JSON.parse(txsOriginalCopy));
+        show("Could not save the request. The new entries were undone. Nothing was changed.", false);
+        return;
+      }
+
+      notify("CORRECTION_PROCESSED", "Your correction " + r.id + " was processed. Check My History.", r);
+      show("Processed. Reversal " + reversal.id + (replacement ? " and replacement " + replacement.id : "") + " created.", true);
+    } catch (e) {
+      console.error(e); show("Unexpected error. Please check the records and try again.", false);
+    } finally { busy = false; render(); }
+  }
+
+  /* ---------- Display ---------- */
+  function line(parent, label, value, neg) {
+    var d = document.createElement("div"); d.className = "ln";
+    var a = document.createElement("span"); a.textContent = label;
+    var b = document.createElement("span"); b.textContent = value; if (neg) b.className = "neg";
+    d.appendChild(a); d.appendChild(b); parent.appendChild(d);
+  }
+  function box(title) {
+    var d = document.createElement("div"); d.className = "box";
+    var b = document.createElement("b"); b.textContent = title; d.appendChild(b); return d;
+  }
+  function plus(n) { return (n > 0 ? "+" : "") + equbFormat(n); }
+
+  function render() {
+    var f = $("filter").value;
+    var all = equbLoad(EQUB_KEYS.corrections, []).slice().sort(function (a, b) {
+      return String(b.createdAt || "").localeCompare(String(a.createdAt || ""));
+    });
+    var txs = equbLoad(EQUB_KEYS.transactions, []);
+    var rows = all.filter(function (r) {
+      if (f === "ALL") return true;
+      if (f === "OPEN") return r.status === "PENDING" || r.status === "APPROVED";
+      return r.status === f;
+    });
+    $("count").textContent = rows.length + " of " + all.length + " request(s)";
+
+    var list = $("list");
+    list.innerHTML = "";
+    if (!rows.length) { list.innerHTML = '<div class="small">No requests found.</div>'; return; }
+
+    rows.forEach(function (r) {
+      var orig = txs.find(function (t) { return t.id === r.transactionId; });
+      var snap = r.originalSnapshot || {};
+      var div = document.createElement("div");
+      div.className = "req";
+
+      var head = document.createElement("div");
+      var title = document.createElement("b");
+      title.textContent = (TYPE_LABEL[r.correctionType] || r.correctionType) + " | " + r.id;
+      head.appendChild(title);
+      var tag = document.createElement("span"); tag.className = "tag " + r.status; tag.textContent = r.status; head.appendChild(tag);
+      if (r.manualReviewOnly) { var mt = document.createElement("span"); mt.className = "tag MANUAL"; mt.textContent = "MANUAL REVIEW"; head.appendChild(mt); }
+      div.appendChild(head);
+
+      var meta = document.createElement("div"); meta.className = "small";
+      meta.textContent = (r.collectorName || r.collectorId) + " | payment " + r.transactionId + " | " + (r.createdAt ? new Date(r.createdAt).toLocaleString() : "");
+      div.appendChild(meta);
+
+      var reason = document.createElement("div"); reason.style.cssText = "font-size:14px;margin-top:6px";
+      reason.textContent = "Reason: " + r.reason + (r.details ? "  |  Details: " + r.details : "");
+      div.appendChild(reason);
+
+      /* Original vs what would be created */
+      var grid = document.createElement("div"); grid.className = "grid";
+      var b1 = box("Original payment");
+      var o = orig || snap;
+      line(b1, "Member", (o.memberName || o.memberId || "-"));
+      line(b1, "Group", (o.groupName || o.groupId || "-"));
+      line(b1, "Amount", plus(Number(o.amount) || 0));
+      line(b1, "Method", METHOD[o.method] || o.method || "-");
+      line(b1, "Business date", o.date || "-");
+      grid.appendChild(b1);
+
+      var b2 = box(r.status === "PROCESSED" ? "Entries created" : "Entries that will be created");
+      if (r.status === "PROCESSED") {
+        if (r.closedWithoutFinancialEntries) { line(b2, "Result", "Closed manually, no financial entries"); }
+        else {
+          var rv = txs.find(function (t) { return t.id === r.reversalTransactionId; });
+          var rp = txs.find(function (t) { return t.id === r.replacementTransactionId; });
+          if (rv) line(b2, "Reversal", plus(Number(rv.amount)) + " " + (METHOD[rv.method] || ""), true);
+          if (rp) line(b2, "Replacement", plus(Number(rp.amount)) + " " + (METHOD[rp.method] || ""));
+          if (!rp) line(b2, "Replacement", "none (duplicate)");
+          var net = (rv ? Number(rv.amount) : 0) + (rp ? Number(rp.amount) : 0) + (Number(o.amount) || 0);
+          line(b2, "Net for this payment", equbFormat(net));
+        }
+      } else if (r.manualReviewOnly) {
+        line(b2, "Automatic entries", "None. Manual review only.");
+      } else if (orig) {
+        var rep = buildReplacement(r, orig);
+        var oa = equbMoney(orig.amount);
+        line(b2, "Reversal", plus(-oa) + " " + (METHOD[orig.method] || ""), true);
+        if (rep) {
+          line(b2, "Replacement", plus(rep.amount) + " " + (METHOD[rep.method] || ""));
+          if (rep.memberId !== orig.memberId) line(b2, "New member", rep.memberName + " (" + rep.memberId + ")");
+          if (rep.groupId !== orig.groupId) line(b2, "New group", rep.groupName + " (" + rep.groupId + ")");
+          line(b2, "Net for this payment", equbFormat(rep.amount));
+          line(b2, "Physical cash change", plus((rep.method === "CASH" ? rep.amount : 0) - (orig.method === "CASH" ? oa : 0)));
+        } else {
+          line(b2, "Replacement", "none (duplicate)");
+          line(b2, "Net for this payment", equbFormat(0));
+          line(b2, "Physical cash change", plus(orig.method === "CASH" ? -oa : 0));
+        }
+        var err = validateChanges(r, orig);
+        if (err && r.status !== "REJECTED") line(b2, "Problem", err, true);
+      } else {
+        line(b2, "Problem", "Original transaction not found", true);
+      }
+      grid.appendChild(b2);
+      div.appendChild(grid);
+
+      if (r.reviewedAt || r.adminNote) {
+        var rv2 = document.createElement("div"); rv2.className = "small"; rv2.style.marginTop = "6px";
+        rv2.textContent = (r.reviewedByName ? "Reviewed by " + r.reviewedByName + " (" + r.reviewedBy + ")" : "") +
+          (r.processedBy ? " | Processed by " + (r.processedByName || r.processedBy) : "") +
+          (r.adminNote ? " | Note: " + r.adminNote : "");
+        div.appendChild(rv2);
+      }
+
+      /* Buttons */
+      if (r.status === "PENDING" || r.status === "APPROVED") {
+        var ta = document.createElement("textarea");
+        ta.placeholder = r.manualReviewOnly && r.status === "APPROVED" ? "What was done? (required to close)" : "Admin note (required to reject)";
+        ta.style.marginTop = "8px";
+        div.appendChild(ta);
+
+        var acts = document.createElement("div"); acts.className = "actions";
+        if (r.status === "PENDING") {
+          var ap = document.createElement("button"); ap.textContent = "Approve";
+          ap.addEventListener("click", function () { review(r.id, "APPROVE", ta.value); });
+          acts.appendChild(ap);
+        }
+        if (r.status === "APPROVED") {
+          var pr = document.createElement("button"); pr.className = "blue";
+          if (r.manualReviewOnly) {
+            pr.textContent = "Close manually";
+            pr.addEventListener("click", function () { closeManually(r.id, ta.value); });
+          } else {
+            pr.textContent = "Process (create entries)";
+            pr.addEventListener("click", function () {
+              if (confirm("Create the reversal" + (r.correctionType === "DUPLICATE_TRANSACTION" ? "" : " and replacement") + " now? This cannot be undone.")) processRequest(r.id);
+            });
+          }
+          acts.appendChild(pr);
+        }
+        var rj = document.createElement("button"); rj.className = "red"; rj.textContent = "Reject";
+        rj.addEventListener("click", function () { review(r.id, "REJECT", ta.value); });
+        acts.appendChild(rj);
+        div.appendChild(acts);
+      }
+      list.appendChild(div);
+    });
+  }
+
+  $("filter").addEventListener("change", render);
+  if (admin) render();
+</script>
+</body>
+</html>

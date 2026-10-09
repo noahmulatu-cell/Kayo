@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Transactions - Digital Equb</title>
+  <style>
+    *{box-sizing:border-box}
+    body{font-family:Arial,sans-serif;background:#f3f6f4;margin:0;padding:16px}
+    .wrap{max-width:900px;margin:0 auto}
+    .card{background:#fff;padding:16px;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,.08);margin-bottom:14px}
+    h1{margin:0;font-size:20px;color:#1b5e20}
+    .top{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px}
+    .nav{display:flex;gap:10px;flex-wrap:wrap;margin-top:8px;font-size:13px}.nav a{color:#2e7d32}
+    .grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}
+    @media(max-width:600px){.grid{grid-template-columns:1fr 1fr}}
+    label{display:block;margin:8px 0 4px;font-size:13px}
+    input,select{width:100%;padding:10px;font-size:15px;border:1px solid #ccc;border-radius:8px;background:#fff}
+    button{padding:10px 14px;font-size:14px;border:0;border-radius:8px;background:#2e7d32;color:#fff}
+    button.gray{background:#757575}
+    .row{display:flex;justify-content:space-between;padding:6px 0;font-size:14px;border-bottom:1px solid #eee}
+    .row:last-child{border-bottom:0}.row.t{font-weight:bold;border-top:2px solid #2e7d32}
+    .small{font-size:12px;color:#666}
+    .item{border-bottom:1px solid #eee;padding:10px 0}.item:last-child{border-bottom:0}
+    .line{display:flex;justify-content:space-between;gap:8px}
+    .amt{font-weight:bold;white-space:nowrap}.neg{color:#b71c1c}
+    .tag{font-size:11px;padding:2px 8px;border-radius:10px;color:#fff;margin-left:6px;white-space:nowrap}
+    .tag.COLLECTION{background:#2e7d32}.tag.REVERSAL{background:#c62828}.tag.CORRECTED{background:#1565c0}
+    .tag.c{background:#6a1b9a}
+    a.r{font-size:13px;color:#1565c0}
+  </style>
+  <link rel="stylesheet" href="styles/style.css">
+</head>
+<body>
+<div class="wrap">
+  <div class="card">
+    <div class="top"><h1>Transactions</h1><button class="gray" id="logout" type="button">Log out</button></div>
+    <div id="admin" class="small"></div>
+    <div class="nav">
+      <a href="index.html">Dashboard</a><a href="members.html">Members</a><a href="equb.html">Equb Groups</a>
+      <a href="collectors.html">Collectors</a><a href="transactions.html">Transactions</a>
+      <a href="correction-requests.html">Correction Requests</a><a href="settlements.html">Settlements</a>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="grid">
+      <div><label for="from">From</label><input id="from" type="date"></div>
+      <div><label for="to">To</label><input id="to" type="date"></div>
+      <div><label for="col">Collector</label><select id="col"></select></div>
+      <div><label for="method">Method</label>
+        <select id="method"><option value="ALL">All</option><option value="CASH">Cash</option><option value="MOBILE_MONEY">Mobile money</option><option value="BANK">Bank</option></select></div>
+      <div><label for="type">Type</label>
+        <select id="type"><option value="ALL">All</option><option value="COLLECTION">Original</option><option value="REVERSAL">Reversal</option><option value="CORRECTED">Corrected</option></select></div>
+      <div><label for="q">Search</label><input id="q" type="text" placeholder="member, ID"></div>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:10px">
+      <button id="today" type="button">Today</button>
+      <button id="all" class="gray" type="button">Reset</button>
+      <button id="csv" type="button" style="margin-left:auto">Export CSV</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <b>Totals for the records shown</b>
+    <div class="small" id="scope" style="margin-bottom:6px"></div>
+    <div class="row"><span>Original collections</span><span id="sGross"></span></div>
+    <div class="row"><span>Reversals</span><span id="sRev"></span></div>
+    <div class="row"><span>Corrected payments</span><span id="sCor"></span></div>
+    <div class="row t"><span>Net collection</span><span id="sNet"></span></div>
+    <div class="row"><span>Physical cash (net)</span><span id="sCash"></span></div>
+    <div class="row"><span>Electronic (net)</span><span id="sElec"></span></div>
+    <div class="row"><span>Payments recorded</span><span id="sCount"></span></div>
+  </div>
+
+  <div class="card"><div id="list"></div><div id="more" class="small"></div></div>
+</div>
+
+<script src="equb-core.js"></script>
+  <script src="admin-nav.js"></script>
+<script>
+  var $ = function (id) { return document.getElementById(id); };
+  var admin = equbGetAdminSession();
+  if (!admin) { window.location.href = "admin-login.html"; }
+  window.onerror = function (m, s, l) { $("admin").textContent = "Page error: " + m + " (line " + l + ")"; };
+  $("logout").addEventListener("click", function () { localStorage.removeItem(EQUB_KEYS.adminSession); window.location.href = "admin-login.html"; });
+  var METHOD = { CASH: "Cash", MOBILE_MONEY: "Mobile money", BANK: "Bank" };
+  var SHOW_LIMIT = 200;
+
+  function correctionLabel(t, reqs) {
+    var type = t.type || "COLLECTION";
+    if (type === "REVERSAL") return "REVERSAL";
+    if (type === "CORRECTED") return "APPLIED";
+    if (t.reversalTransactionId) return "CORRECTED";
+    var r = reqs.filter(function (x) { return x.transactionId === t.id; })
+      .sort(function (a, b) { return String(b.createdAt).localeCompare(String(a.createdAt)); })[0];
+    if (r && (r.status === "PENDING" || r.status === "APPROVED")) return r.status;
+    return "NONE";
+  }
+
+  function filtered() {
+    var from = $("from").value, to = $("to").value, col = $("col").value;
+    var m = $("method").value, ty = $("type").value, q = $("q").value.trim().toLowerCase();
+    return equbLoad(EQUB_KEYS.transactions, []).filter(function (t) {
+      if (from && (t.date || "") < from) return false;
+      if (to && (t.date || "") > to) return false;
+      if (col !== "ALL" && t.collectorId !== col) return false;
+      if (m !== "ALL" && t.method !== m) return false;
+      if (ty !== "ALL" && (t.type || "COLLECTION") !== ty) return false;
+      if (q && (String(t.id) + " " + (t.memberName || "") + " " + (t.memberId || "") + " " + (t.collectorName || "")).toLowerCase().indexOf(q) === -1) return false;
+      return true;
+    }).sort(function (a, b) { return String(b.createdAt || "").localeCompare(String(a.createdAt || "")); });
+  }
+
+  function render() {
+    var rows = filtered(), reqs = equbLoad(EQUB_KEYS.corrections, []);
+    var s = equbSummarize(rows);
+    $("sGross").textContent = equbFormat(s.grossOriginal); $("sRev").textContent = equbFormat(s.reversals);
+    $("sCor").textContent = equbFormat(s.corrected); $("sNet").textContent = equbFormat(s.net);
+    $("sCash").textContent = equbFormat(s.cash); $("sElec").textContent = equbFormat(s.electronic);
+    $("sCount").textContent = s.count;
+    $("scope").textContent = rows.length + " record(s) match the filters.";
+
+    var list = $("list"); list.innerHTML = "";
+    if (!rows.length) { list.innerHTML = '<div class="small">No transactions found.</div>'; $("more").textContent = ""; return; }
+    rows.slice(0, SHOW_LIMIT).forEach(function (t) {
+      var type = t.type || "COLLECTION", amt = Number(t.amount) || 0, cl = correctionLabel(t, reqs);
+      var d = document.createElement("div"); d.className = "item";
+      d.innerHTML = '<div class="line"><div><b class="n"></b><span class="tag ' + type + '">' + type + '</span><span class="tag c cl"></span></div><div class="amt"></div></div><div class="small l1"></div><div class="small l2"></div><a class="r" href="#">Receipt</a>';
+      d.querySelector(".n").textContent = t.memberName || t.memberId || "-";
+      d.querySelector(".cl").textContent = "Correction: " + cl;
+      var a = d.querySelector(".amt"); a.textContent = (amt > 0 ? "+" : "") + equbFormat(amt); if (amt < 0) a.className = "amt neg";
+      d.querySelector(".l1").textContent = (t.date || "-") + " | " + (METHOD[t.method] || t.method) + " | " + (t.groupName || t.groupId || "") + " | " + (t.collectorName || t.collectorId || "");
+      d.querySelector(".l2").textContent = t.id + (t.originalTransactionId ? " | original " + t.originalTransactionId : "");
+      var r = d.querySelector(".r"); r.href = "transaction-receipt.html?id=" + encodeURIComponent(t.id);
+      r.addEventListener("click", function () { equbSave("digital_equb_last_receipt_id", t.id); });
+      list.appendChild(d);
+    });
+    $("more").textContent = rows.length > SHOW_LIMIT ? "Showing the newest " + SHOW_LIMIT + " of " + rows.length + ". Narrow the filters, or export CSV for all." : "";
+  }
+
+  /* CSV uses the same filtered rows as the screen */
+  function csvCell(v) {
+    var s = v === null || v === undefined ? "" : String(v);
+    if (/^[=+\-@]/.test(s) && isNaN(Number(s))) s = "'" + s;      // block spreadsheet formulas
+    return '"' + s.replace(/"/g, '""') + '"';
+  }
+  function exportCsv() {
+    var rows = filtered(), reqs = equbLoad(EQUB_KEYS.corrections, []);
+    var head = ["id", "date", "type", "correction", "member_id", "member_name", "group_id", "group_name", "collector_id", "collector_name", "method", "amount", "status", "sync_status", "original_id", "request_id", "created_at"];
+    var lines = [head.join(",")];
+    rows.forEach(function (t) {
+      lines.push([t.id, t.date, t.type || "COLLECTION", correctionLabel(t, reqs), t.memberId, t.memberName, t.groupId, t.groupName,
+        t.collectorId, t.collectorName, t.method, equbMoney(t.amount).toFixed(2), t.status, t.syncStatus, t.originalTransactionId, t.correctionRequestId, t.createdAt].map(csvCell).join(","));
+    });
+    var s = equbSummarize(rows);
+    lines.push("");
+    lines.push(["NET TOTAL", "", "", "", "", "", "", "", "", "", "", s.net.toFixed(2)].map(csvCell).join(","));
+    var blob = new Blob(["\ufeff" + lines.join("\r\n")], { type: "text/csv;charset=utf-8" });
+    var a = document.createElement("a");
+    a.href = URL.createObjectURL(blob); a.download = "transactions-" + equbToday() + ".csv";
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  }
+
+  if (admin) {
+    $("admin").textContent = "Logged in as " + admin.adminName;
+    var sel = $("col"); sel.innerHTML = '<option value="ALL">All collectors</option>';
+    equbLoad(EQUB_KEYS.collectors, []).forEach(function (c) {
+      var o = document.createElement("option"); o.value = c.id; o.textContent = c.name + " (" + c.id + ")"; sel.appendChild(o);
+    });
+    ["from", "to", "col", "method", "type"].forEach(function (i) { $(i).addEventListener("change", render); });
+    $("q").addEventListener("input", render);
+    $("today").addEventListener("click", function () { $("from").value = equbToday(); $("to").value = equbToday(); render(); });
+    $("all").addEventListener("click", function () { ["from", "to", "q"].forEach(function (i) { $(i).value = ""; }); ["col", "method", "type"].forEach(function (i) { $(i).value = "ALL"; }); render(); });
+    $("csv").addEventListener("click", exportCsv);
+    render();
+  }
+</script>
+</body>
+</html>

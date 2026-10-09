@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Offline Sync - Digital Equb</title>
+  <style>
+    *{box-sizing:border-box}
+    body{font-family:Arial,sans-serif;background:#f3f6f4;margin:0;padding:16px}
+    .wrap{max-width:600px;margin:0 auto}
+    .card{background:#fff;padding:16px;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,.08);margin-bottom:14px}
+    h1{margin:0 0 4px;font-size:20px;color:#1b5e20}
+    .top{display:flex;justify-content:space-between;align-items:center;gap:8px}
+    .badge{font-size:12px;padding:4px 10px;border-radius:12px;color:#fff;white-space:nowrap}
+    .on{background:#2e7d32}.off{background:#e65100}
+    .nav{display:flex;gap:10px;flex-wrap:wrap;margin-top:8px;font-size:13px}
+    .nav a{color:#2e7d32}
+    .row{display:flex;justify-content:space-between;padding:6px 0;font-size:14px;border-bottom:1px solid #eee}
+    .row:last-child{border-bottom:0}
+    button{padding:13px;font-size:15px;border:0;border-radius:8px;background:#2e7d32;color:#fff;width:100%;margin-top:10px}
+    button:disabled{background:#9bbf9d}
+    button.gray{background:#455a64}
+    .demo{background:#fff3e0;color:#e65100;padding:10px;border-radius:8px;font-size:13px;margin-bottom:12px}
+    .real{background:#e8f5e9;color:#1b5e20;padding:10px;border-radius:8px;font-size:13px;margin-bottom:12px}
+    #msg{margin-top:10px;padding:10px;border-radius:8px;font-size:14px;display:none}
+    .err{background:#fdecea;color:#b71c1c}.okm{background:#e8f5e9;color:#1b5e20}
+    .item{border-bottom:1px solid #eee;padding:10px 0;font-size:14px}
+    .item:last-child{border-bottom:0}
+    .sub{font-size:12px;color:#666;margin-top:2px;word-break:break-all}
+    .tag{font-size:11px;padding:2px 8px;border-radius:10px;color:#fff;margin-left:6px}
+    .tag.PENDING{background:#e65100}.tag.FAILED{background:#c62828}
+    .errtxt{color:#b71c1c;font-size:12px;margin-top:2px}
+    label.chk{display:flex;gap:8px;align-items:center;font-size:13px;margin-top:10px}
+    label.chk input{width:auto}
+  </style>
+  <link rel="stylesheet" href="styles/style.css">
+</head>
+<body>
+<div class="wrap">
+
+  <div class="card">
+    <div class="top">
+      <div>
+        <h1>Offline Sync</h1>
+        <div id="who" style="font-size:13px;color:#666"></div>
+      </div>
+      <span id="net" class="badge on">Online</span>
+    </div>
+    <div class="nav">
+      <a href="collector-dashboard.html">Dashboard</a>
+      <a href="collector-collection.html">Collection</a>
+      <a href="collector-history.html">My History</a>
+      <a href="collector-corrections.html">Corrections</a>
+    </div>
+  </div>
+
+  <div class="card">
+    <div id="modeBox"></div>
+    <div class="row"><span>Waiting to sync</span><b id="cntWaiting">0</b></div>
+    <div class="row"><span>Failed (will retry)</span><b id="cntFailed">0</b></div>
+    <div class="row"><span>Total amount waiting</span><b id="sumWaiting">0.00 ETB</b></div>
+
+    <label class="chk" id="failBox" style="display:none">
+      <input type="checkbox" id="simFail"> Test: make the demo server fail
+    </label>
+
+    <button id="syncBtn" type="button">Sync now</button>
+    <div id="msg"></div>
+  </div>
+
+  <div class="card" id="repairCard" style="display:none">
+    <b>Missing queue entries found</b>
+    <div class="sub" id="repairInfo" style="margin:6px 0"></div>
+    <button id="repairBtn" class="gray" type="button">Restore to queue</button>
+  </div>
+
+  <div class="card">
+    <b>Queue</b>
+    <div id="list"></div>
+  </div>
+
+</div>
+
+<script src="equb-core.js"></script>
+<script>
+  /* ======================================================
+     CONFIG
+     Empty API_URL = no server. Sync runs as a DEMO only.
+     Later, set it to your backend, e.g. "https://api.example.com"
+     ====================================================== */
+  var API_URL = "";
+  var DEMO_SERVER_KEY = "digital_equb_demo_server_receipts";   // demo helper key only
+
+  var $ = function (id) { return document.getElementById(id); };
+  var syncing = false;
+  var me = null;
+
+  window.onerror = function (msg, src, line) {
+    $("msg").textContent = "Page error: " + msg + " (line " + line + ")";
+    $("msg").className = "err"; $("msg").style.display = "block";
+  };
+
+  function show(text, good) {
+    $("msg").textContent = text;
+    $("msg").className = good ? "okm" : "err";
+    $("msg").style.display = "block";
+  }
+
+  /* ---------- Guard ---------- */
+  function requireSession() {
+    var s = equbGetCollectorSession();
+    if (!s) { window.location.href = "collector-login.html"; return null; }
+    return s;
+  }
+
+  function updateNet() {
+    var online = navigator.onLine;
+    $("net").textContent = online ? "Online" : "Offline";
+    $("net").className = "badge " + (online ? "on" : "off");
+  }
+
+  /* ---------- Queue helpers (only this collector's items) ---------- */
+  function myQueue() {
+    return equbLoad(EQUB_KEYS.pending, []).filter(function (p) { return p.collectorId === me.collectorId; });
+  }
+
+  /* Transactions saved as PENDING/FAILED that are missing from the queue */
+  function findMissing() {
+    var keys = {};
+    equbLoad(EQUB_KEYS.pending, []).forEach(function (p) { keys[p.idempotencyKey] = true; });
+    return equbLoad(EQUB_KEYS.transactions, []).filter(function (t) {
+      return t.collectorId === me.collectorId &&
+             (t.syncStatus === "PENDING" || t.syncStatus === "FAILED") &&
+             t.idempotencyKey && !keys[t.idempotencyKey];
+    });
+  }
+
+  function render() {
+    var q = myQueue();
+    var failed = q.filter(function (p) { return p.syncStatus === "FAILED"; });
+    var waiting = q.length - failed.length;
+    var sum = q.reduce(function (s, p) { return s + (Number(p.amount) || 0); }, 0);
+
+    $("cntWaiting").textContent = waiting;
+    $("cntFailed").textContent = failed.length;
+    $("sumWaiting").textContent = equbFormat(sum);
+    $("syncBtn").disabled = syncing || q.length === 0;
+    $("syncBtn").textContent = syncing ? "Syncing..." : (API_URL ? "Sync now" : "Run demo sync");
+
+    var list = $("list");
+    list.innerHTML = "";
+    if (!q.length) { list.innerHTML = '<div class="sub" style="padding:10px 0">Nothing waiting. All saved payments are synced.</div>'; }
+    q.slice().reverse().forEach(function (p) {
+      var st = p.syncStatus === "FAILED" ? "FAILED" : "PENDING";
+      var div = document.createElement("div");
+      div.className = "item";
+      div.innerHTML = '<div><b></b><span class="tag ' + st + '">' + st + '</span></div><div class="sub l1"></div><div class="sub l2"></div><div class="errtxt"></div>';
+      div.querySelector("b").textContent = equbFormat(p.amount) + "  " + (p.memberName || p.memberId);
+      div.querySelector(".l1").textContent = (p.date || "") + "  |  " + (p.method || "") + "  |  " + (p.groupName || p.groupId || "");
+      div.querySelector(".l2").textContent = p.id;
+      if (p.lastError) div.querySelector(".errtxt").textContent = "Last error: " + p.lastError + " (tries: " + (p.attempts || 1) + ")";
+      list.appendChild(div);
+    });
+
+    var missing = findMissing();
+    $("repairCard").style.display = missing.length ? "block" : "none";
+    $("repairInfo").textContent = missing.length + " saved payment(s) are marked as waiting but are not in the queue. Restore them so they are not lost.";
+  }
+
+  /* ======================================================
+     SERVER ADAPTER
+     Resolves { confirmed:true, duplicate:bool } only when the
+     server confirms. Anything else rejects with an Error.
+     ====================================================== */
+  function sendToServer(txn) {
+    if (API_URL) {
+      /* REAL MODE (needs a backend that enforces the idempotency key) */
+      return fetch(API_URL + "/transactions/sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Idempotency-Key": txn.idempotencyKey },
+        body: JSON.stringify(txn)
+      }).then(function (res) {
+        return res.json().catch(function () { return {}; }).then(function (body) {
+          if (res.status === 200 || res.status === 201) return { confirmed: true, duplicate: !!body.duplicate };
+          if (res.status === 409 && body.duplicate) return { confirmed: true, duplicate: true };
+          throw new Error("Server said " + res.status + (body.message ? ": " + body.message : ""));
+        });
+      });
+    }
+
+    /* DEMO MODE: pretends to be a server and enforces idempotency */
+    return new Promise(function (resolve, reject) {
+      setTimeout(function () {
+        if ($("simFail").checked) { reject(new Error("Demo server unavailable")); return; }
+        var store = equbLoad(DEMO_SERVER_KEY, {});
+        var duplicate = !!store[txn.idempotencyKey];
+        if (!duplicate) {
+          store[txn.idempotencyKey] = { transactionId: txn.id, receivedAt: new Date().toISOString() };
+          if (!equbSave(DEMO_SERVER_KEY, store)) { reject(new Error("Demo server could not store the record")); return; }
+        }
+        resolve({ confirmed: true, duplicate: duplicate });
+      }, 400);
+    });
+  }
+
+  /* ---------- After a confirmed sync: update transaction, THEN remove from queue ---------- */
+  function markConfirmed(item) {
+    var txs = equbLoad(EQUB_KEYS.transactions, []);
+    var t = txs.find(function (x) { return x.idempotencyKey === item.idempotencyKey; });
+    if (t) {
+      t.syncStatus = API_URL ? "SYNCED" : "SYNCED_PROTOTYPE";
+      t.syncedAt = new Date().toISOString();
+      if (!equbSave(EQUB_KEYS.transactions, txs)) return false;   // keep in queue if this fails
+    }
+    var queue = equbLoad(EQUB_KEYS.pending, []).filter(function (p) {
+      return p.idempotencyKey !== item.idempotencyKey;
+    });
+    return equbSave(EQUB_KEYS.pending, queue);
+  }
+
+  function markFailed(item, message) {
+    var queue = equbLoad(EQUB_KEYS.pending, []);
+    queue.forEach(function (p) {
+      if (p.idempotencyKey === item.idempotencyKey) {
+        p.syncStatus = "FAILED";
+        p.lastError = message;
+        p.attempts = (p.attempts || 0) + 1;
+        p.lastAttemptAt = new Date().toISOString();
+      }
+    });
+    equbSave(EQUB_KEYS.pending, queue);
+    var txs = equbLoad(EQUB_KEYS.transactions, []);
+    txs.forEach(function (t) { if (t.idempotencyKey === item.idempotencyKey) t.syncStatus = "FAILED"; });
+    equbSave(EQUB_KEYS.transactions, txs);
+  }
+
+  /* ---------- Sync all (one at a time, never loses an item) ---------- */
+  function syncAll() {
+    if (syncing) return;
+    if (!requireSession()) return;
+    if (!navigator.onLine) { show("You are offline. Connect to the internet and try again. Nothing was lost.", false); return; }
+
+    var seen = {};
+    var items = myQueue().filter(function (p) {
+      if (seen[p.idempotencyKey]) return false;      /* skip duplicate queue entries */
+      seen[p.idempotencyKey] = true; return true;
+    });
+    if (!items.length) { show("Nothing to sync.", true); return; }
+
+    syncing = true; render();
+    var ok = 0, dup = 0, bad = 0, lastErr = "";
+
+    function next(i) {
+      if (i >= items.length) {
+        syncing = false; render();
+        var text = ok + " confirmed" + (dup ? " (" + dup + " already existed, no duplicate created)" : "") +
+                   ", " + bad + " failed" + (bad ? ". Failed items stay in the queue. " + lastErr : ".");
+        show((API_URL ? "" : "DEMO SYNC (no real server). ") + text, bad === 0);
+        return;
+      }
+      var item = items[i];
+      sendToServer(item).then(function (r) {
+        if (r && r.confirmed && markConfirmed(item)) { ok++; if (r.duplicate) dup++; }
+        else { bad++; lastErr = "Could not update local records."; markFailed(item, lastErr); }
+      }).catch(function (e) {
+        bad++; lastErr = e.message || "Unknown error";
+        markFailed(item, lastErr);
+      }).then(function () { next(i + 1); });
+    }
+    next(0);
+  }
+
+  /* ---------- Restore missing queue entries ---------- */
+  function repair() {
+    var missing = findMissing();
+    if (!missing.length) return;
+    var queue = equbLoad(EQUB_KEYS.pending, []);
+    missing.forEach(function (t) {
+      if (!queue.some(function (p) { return p.idempotencyKey === t.idempotencyKey; })) {
+        var copy = JSON.parse(JSON.stringify(t));
+        copy.syncStatus = "PENDING";
+        queue.push(copy);
+      }
+    });
+    if (equbSave(EQUB_KEYS.pending, queue)) show(missing.length + " payment(s) restored to the queue.", true);
+    else show("Could not restore the queue.", false);
+    render();
+  }
+
+  /* ---------- Start ---------- */
+  (function init() {
+    me = requireSession();
+    if (!me) return;
+    $("who").textContent = (me.collectorName || me.collectorId) + " (" + me.collectorId + ")";
+
+    if (API_URL) {
+      $("modeBox").innerHTML = '<div class="real">Connected to server: ' + API_URL + '</div>';
+    } else {
+      $("modeBox").innerHTML = '<div class="demo"><b>Prototype mode.</b> No server is connected. "Sync" runs a demo that only simulates a server. Payments are marked SYNCED_PROTOTYPE, not truly synced.</div>';
+      $("failBox").style.display = "flex";
+    }
+
+    updateNet();
+    window.addEventListener("online", updateNet);
+    window.addEventListener("offline", updateNet);
+    $("syncBtn").addEventListener("click", syncAll);
+    $("repairBtn").addEventListener("click", repair);
+    render();
+  })();
+</script>
+</body>
+</html>

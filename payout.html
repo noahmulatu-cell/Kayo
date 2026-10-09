@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Payout Schedule - Digital Equb</title>
+  <style>
+    *{box-sizing:border-box}
+    body{font-family:Arial,sans-serif;background:#f3f6f4;margin:0;padding:16px}
+    .wrap{max-width:900px;margin:0 auto}
+    .card{background:#fff;padding:16px;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,.08);margin-bottom:14px}
+    h1{margin:0;font-size:20px;color:#1b5e20}h3{margin:0 0 8px}
+    .top{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px}
+    .nav{display:flex;gap:10px;flex-wrap:wrap;margin-top:8px;font-size:13px}.nav a{color:#2e7d32}
+    label{display:block;margin:10px 0 4px;font-size:14px}
+    input,select,textarea{width:100%;padding:11px;font-size:16px;border:1px solid #ccc;border-radius:8px;background:#fff;font-family:inherit}
+    button{padding:10px 14px;font-size:14px;border:0;border-radius:8px;background:#2e7d32;color:#fff}
+    button.gray{background:#757575}button.red{background:#c62828}button.small{padding:7px 10px;font-size:13px}
+    .grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+    @media(max-width:600px){.grid{grid-template-columns:1fr}}
+    #msg{margin-bottom:12px;padding:10px;border-radius:8px;font-size:14px;display:none}
+    .err{background:#fdecea;color:#b71c1c}.okm{background:#e8f5e9;color:#1b5e20}
+    .small{font-size:12px;color:#666}
+    .p{border-bottom:1px solid #eee;padding:12px 0}.p:last-child{border-bottom:0}
+    .tag{font-size:11px;padding:2px 8px;border-radius:10px;color:#fff;margin-left:6px}
+    .tag.SCHEDULED{background:#e65100}.tag.PAID{background:#2e7d32}.tag.CANCELLED{background:#9e9e9e}
+    .warn{color:#e65100;font-size:12px;margin-top:3px}
+    .actions{margin-top:8px;display:flex;gap:6px;flex-wrap:wrap}
+  </style>
+  <link rel="stylesheet" href="styles/style.css">
+</head>
+<body>
+<div class="wrap">
+  <div class="card">
+    <div class="top"><h1>Payout Schedule</h1><button class="gray small" id="logout" type="button">Log out</button></div>
+    <div id="admin" class="small"></div>
+    <div class="nav"></div>
+  </div>
+
+  <div id="msg"></div>
+
+  <div class="card">
+    <h3>Schedule a payout</h3>
+    <div class="grid">
+      <div><label for="group">Equb group</label><select id="group"></select></div>
+      <div><label for="member">Recipient (active member of the group)</label><select id="member"></select></div>
+      <div><label for="cycle">Cycle / round number</label><input id="cycle" type="number" inputmode="numeric" min="1" step="1"></div>
+      <div><label for="amount">Payout amount (ETB)</label><input id="amount" type="number" inputmode="decimal" min="0" step="0.01"></div>
+      <div><label for="date">Scheduled date</label><input id="date" type="date"></div>
+      <div><label for="method">Payment method</label>
+        <select id="method"><option value="CASH">Cash</option><option value="MOBILE_MONEY">Mobile money</option><option value="BANK">Bank</option></select></div>
+    </div>
+    <div id="suggest" class="small" style="margin-top:6px"></div>
+    <label for="notes">Notes (optional)</label>
+    <textarea id="notes" rows="2"></textarea>
+    <button id="save" type="button" style="width:100%;margin-top:12px">Schedule payout</button>
+  </div>
+
+  <div class="card">
+    <label for="filter">Show</label>
+    <select id="filter"><option value="ALL">All</option><option value="SCHEDULED">Scheduled</option><option value="PAID">Paid</option><option value="CANCELLED">Cancelled</option></select>
+    <div id="list" style="margin-top:10px"></div>
+  </div>
+</div>
+
+<script src="equb-core.js"></script>
+<script src="admin-nav.js"></script>
+<script>
+  var $ = function (id) { return document.getElementById(id); };
+  var admin = equbGetAdminSession();
+  if (!admin) { window.location.href = "admin-login.html"; }
+  var busy = false;
+  window.onerror = function (m, s, l) { show("Page error: " + m + " (line " + l + ")", false); };
+  $("logout").addEventListener("click", function () { localStorage.removeItem(EQUB_KEYS.adminSession); window.location.href = "admin-login.html"; });
+
+  var METHOD = { CASH: "Cash", MOBILE_MONEY: "Mobile money", BANK: "Bank" };
+  function isActive(s) { return !s || String(s).trim().toUpperCase() === "ACTIVE"; }
+  function mName(m) { return m.name || m.fullName || m.id; }
+  function gName(g) { return g.name || g.groupName || g.id; }
+  function show(t, good) { $("msg").textContent = t; $("msg").className = good ? "okm" : "err"; $("msg").style.display = "block"; window.scrollTo(0, 0); }
+  function requireAdmin() {
+    admin = equbGetAdminSession();
+    if (!admin) { window.location.href = "admin-login.html"; return null; }
+    return admin;
+  }
+  function addHistory(p, action, note, a) {
+    p.history = p.history || [];
+    p.history.push({ action: action, at: new Date().toISOString(), by: a.adminId, byName: a.adminName, note: note || "" });
+  }
+  function notify(type, message, p) {
+    var n = equbLoad(EQUB_KEYS.notifications, []);
+    n.push({ id: equbUid("NTF"), type: type, recipientRole: "ADMIN", message: message, relatedId: p.id, read: false, createdAt: new Date().toISOString() });
+    equbSave(EQUB_KEYS.notifications, n);
+  }
+
+  /* Members with an ACTIVE membership in the group */
+  function groupMembers(groupId) {
+    var members = equbLoad(EQUB_KEYS.members, []), out = [];
+    equbLoad(EQUB_KEYS.memberships, []).forEach(function (ms) {
+      if (ms.groupId !== groupId || !isActive(ms.status)) return;
+      var m = members.find(function (x) { return x.id === ms.memberId; });
+      if (m && isActive(m.status) && !out.some(function (o) { return o.id === m.id; })) out.push(m);
+    });
+    return out;
+  }
+
+  /* Money collected for the group minus payouts already paid. Not a guarantee of cash on hand. */
+  function groupFunds(groupId) {
+    var collected = equbSummarize(equbLoad(EQUB_KEYS.transactions, []).filter(function (t) { return t.groupId === groupId; })).net;
+    var paid = equbLoad(EQUB_KEYS.payouts, []).filter(function (p) { return p.groupId === groupId && p.status === "PAID"; })
+      .reduce(function (s, p) { return s + (Number(p.amount) || 0); }, 0);
+    return { collected: equbMoney(collected), paid: equbMoney(paid), available: equbMoney(collected - paid) };
+  }
+
+  function loadGroups() {
+    var groups = equbLoad(EQUB_KEYS.groups, []).filter(function (g) { return isActive(g.status); });
+    $("group").innerHTML = "";
+    if (!groups.length) { $("group").innerHTML = '<option value="">No active groups</option>'; }
+    groups.forEach(function (g) {
+      var o = document.createElement("option"); o.value = g.id; o.textContent = gName(g) + " (" + g.id + ")"; $("group").appendChild(o);
+    });
+    onGroupChange();
+  }
+
+  function onGroupChange() {
+    var gid = $("group").value, list = gid ? groupMembers(gid) : [];
+    $("member").innerHTML = "";
+    if (!list.length) { $("member").innerHTML = '<option value="">No active members in this group</option>'; }
+    list.forEach(function (m) {
+      var o = document.createElement("option"); o.value = m.id; o.textContent = mName(m) + " (" + m.id + ")"; $("member").appendChild(o);
+    });
+    var g = equbLoad(EQUB_KEYS.groups, []).find(function (x) { return x.id === gid; });
+    var contribution = g ? Number(g.contributionAmount !== undefined ? g.contributionAmount : g.amount) || 0 : 0;
+    var cycles = equbLoad(EQUB_KEYS.payouts, []).filter(function (p) { return p.groupId === gid && p.status !== "CANCELLED"; })
+      .map(function (p) { return Number(p.cycle) || 0; });
+    $("cycle").value = cycles.length ? Math.max.apply(null, cycles) + 1 : 1;
+    $("amount").value = contribution * list.length || "";
+    $("suggest").textContent = g ? "Suggested amount = contribution " + equbFormat(contribution) + " x " + list.length + " active member(s). You can change it." : "";
+  }
+
+  function schedule() {
+    if (busy) return;
+    var a = requireAdmin(); if (!a) return;
+    busy = true; $("save").disabled = true;
+    try {
+      var gid = $("group").value, mid = $("member").value;
+      var cycle = parseInt($("cycle").value, 10), amount = equbMoney($("amount").value);
+      var date = $("date").value, method = $("method").value;
+      if (!gid) return show("Select a group.", false);
+      if (!mid) return show("Select a recipient.", false);
+      if (!(cycle >= 1)) return show("Cycle must be 1 or more.", false);
+      if (!(amount > 0)) return show("Amount must be greater than 0.", false);
+      if (!date) return show("Choose the scheduled date.", false);
+      if (["CASH", "MOBILE_MONEY", "BANK"].indexOf(method) === -1) return show("Choose a valid payment method.", false);
+
+      var group = equbLoad(EQUB_KEYS.groups, []).find(function (g) { return g.id === gid; });
+      var member = equbLoad(EQUB_KEYS.members, []).find(function (m) { return m.id === mid; });
+      if (!group || !isActive(group.status)) return show("The group is not active.", false);
+      if (!member || !isActive(member.status)) return show("The recipient is not active.", false);
+      var inGroup = equbLoad(EQUB_KEYS.memberships, []).some(function (ms) { return ms.memberId === mid && ms.groupId === gid && isActive(ms.status); });
+      if (!inGroup) return show("The recipient does not belong to this group.", false);
+
+      var list = equbLoad(EQUB_KEYS.payouts, []);
+      if (list.some(function (p) { return p.groupId === gid && Number(p.cycle) === cycle && p.status !== "CANCELLED"; }))
+        return show("Cycle " + cycle + " of this group already has a payout. Cancel it first if it must be replaced.", false);
+      var again = list.find(function (p) { return p.groupId === gid && p.memberId === mid && p.status !== "CANCELLED"; });
+      if (again && !confirm(mName(member) + " already has a payout in this group (cycle " + again.cycle + "). Schedule another?")) return;
+
+      var p = { id: equbUid("PAY"), groupId: gid, groupName: gName(group), memberId: mid, memberName: mName(member),
+        cycle: cycle, amount: amount, scheduledDate: date, status: "SCHEDULED", method: method, notes: $("notes").value.trim(),
+        paidAt: null, paidBy: null, createdAt: new Date().toISOString(), createdBy: a.adminId, history: [] };
+      addHistory(p, "SCHEDULED", "", a);
+      list.push(p);
+      if (!equbSave(EQUB_KEYS.payouts, list)) return show("Could not save. Nothing was scheduled.", false);
+      notify("PAYOUT_SCHEDULED", "Payout of " + equbFormat(amount) + " scheduled for " + p.memberName + " (" + p.groupName + ", cycle " + cycle + ").", p);
+      $("notes").value = "";
+      show("Payout " + p.id + " scheduled. Scheduled does not mean funded.", true);
+      onGroupChange(); render();
+    } finally { busy = false; $("save").disabled = false; }
+  }
+
+  function markPaid(id) {
+    if (busy) return;
+    var a = requireAdmin(); if (!a) return;
+    busy = true;
+    try {
+      var list = equbLoad(EQUB_KEYS.payouts, []);
+      var p = list.find(function (x) { return x.id === id; });
+      if (!p || p.status !== "SCHEDULED") return show("Only a scheduled payout can be marked paid.", false);
+
+      var member = equbLoad(EQUB_KEYS.members, []).find(function (m) { return m.id === p.memberId; });
+      var inGroup = equbLoad(EQUB_KEYS.memberships, []).some(function (ms) { return ms.memberId === p.memberId && ms.groupId === p.groupId && isActive(ms.status); });
+      if (!member || !isActive(member.status) || !inGroup) return show("The recipient is no longer an active member of the group. Cancel this payout.", false);
+
+      var f = groupFunds(p.groupId);
+      var text = "Mark " + equbFormat(p.amount) + " as PAID to " + p.memberName + "?\nThis cannot be undone.";
+      var underfunded = p.amount > f.available;
+      if (underfunded) text += "\n\nWARNING: money collected for this group (" + equbFormat(f.collected) + ") minus payouts already paid (" + equbFormat(f.paid) + ") is only " + equbFormat(f.available) + ".";
+      if (!confirm(text)) return;
+
+      p.status = "PAID"; p.paidAt = new Date().toISOString(); p.paidBy = a.adminId; p.paidByName = a.adminName;
+      p.fundsAvailableAtPayment = f.available; p.paidWithFundingWarning = underfunded;
+      addHistory(p, "PAID", underfunded ? "Paid with funding warning" : "", a);
+      if (!equbSave(EQUB_KEYS.payouts, list)) return show("Could not save. Nothing changed.", false);
+      notify("PAYOUT_COMPLETED", "Payout " + p.id + " of " + equbFormat(p.amount) + " paid to " + p.memberName + ".", p);
+      show("Payout marked as paid.", true);
+    } finally { busy = false; render(); }
+  }
+
+  function cancelPayout(id) {
+    if (busy) return;
+    var a = requireAdmin(); if (!a) return;
+    var reason = prompt("Reason for cancelling (required):");
+    if (reason === null) return;
+    if (reason.trim().length < 5) return show("Enter a reason of at least 5 characters.", false);
+    var list = equbLoad(EQUB_KEYS.payouts, []);
+    var p = list.find(function (x) { return x.id === id; });
+    if (!p || p.status !== "SCHEDULED") return show("Only a scheduled payout can be cancelled.", false);
+    p.status = "CANCELLED"; p.cancelledAt = new Date().toISOString(); p.cancelledBy = a.adminId; p.cancelReason = reason.trim();
+    addHistory(p, "CANCELLED", reason.trim(), a);
+    if (!equbSave(EQUB_KEYS.payouts, list)) return show("Could not save.", false);
+    show("Payout cancelled. The record is kept.", true);
+    onGroupChange(); render();
+  }
+
+  function render() {
+    var f = $("filter").value;
+    var rows = equbLoad(EQUB_KEYS.payouts, []).filter(function (p) { return f === "ALL" || p.status === f; })
+      .sort(function (a, b) { return String(b.createdAt || "").localeCompare(String(a.createdAt || "")); });
+    var box = $("list"); box.innerHTML = "";
+    if (!rows.length) { box.innerHTML = '<div class="small">No payouts found.</div>'; return; }
+    rows.forEach(function (p) {
+      var d = document.createElement("div"); d.className = "p";
+      d.innerHTML = '<div><b class="n"></b><span class="tag ' + p.status + '">' + p.status + '</span></div><div class="small l1"></div><div class="small l2"></div><div class="warn"></div><div class="actions"></div>';
+      d.querySelector(".n").textContent = equbFormat(p.amount) + " to " + (p.memberName || p.memberId);
+      d.querySelector(".l1").textContent = p.id + " | " + (p.groupName || p.groupId) + " | cycle " + p.cycle + " | " + (METHOD[p.method] || p.method) + " | scheduled " + p.scheduledDate;
+      var l2 = [];
+      if (p.notes) l2.push("Note: " + p.notes);
+      if (p.status === "PAID") l2.push("Paid " + new Date(p.paidAt).toLocaleString() + " by " + (p.paidByName || p.paidBy));
+      if (p.status === "CANCELLED") l2.push("Cancelled: " + (p.cancelReason || ""));
+      d.querySelector(".l2").textContent = l2.join(" | ");
+      if (p.status === "SCHEDULED") {
+        var fu = groupFunds(p.groupId);
+        if (p.amount > fu.available) d.querySelector(".warn").textContent = "Not covered: only " + equbFormat(fu.available) + " available from this group's collections.";
+        var a = d.querySelector(".actions");
+        var b1 = document.createElement("button"); b1.className = "small"; b1.textContent = "Mark paid";
+        b1.addEventListener("click", function () { markPaid(p.id); });
+        var b2 = document.createElement("button"); b2.className = "small red"; b2.textContent = "Cancel";
+        b2.addEventListener("click", function () { cancelPayout(p.id); });
+        a.appendChild(b1); a.appendChild(b2);
+      } else if (p.status === "PAID" && p.paidWithFundingWarning) {
+        d.querySelector(".warn").textContent = "Paid while collections did not cover it.";
+      }
+      box.appendChild(d);
+    });
+  }
+
+  if (admin) {
+    $("admin").textContent = "Logged in as " + admin.adminName;
+    $("date").value = equbToday();
+    $("group").addEventListener("change", onGroupChange);
+    $("filter").addEventListener("change", render);
+    $("save").addEventListener("click", schedule);
+    loadGroups(); render();
+  }
+</script>
+</body>
+</html>
